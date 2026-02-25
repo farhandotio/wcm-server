@@ -7,33 +7,32 @@ import fs from 'fs';
 
 export const createTag = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: 'Please upload an image for the tag' });
-    }
-
     const { title } = req.body;
-    if (!title) {
-      return res.status(400).json({ message: 'Title is required' });
+
+    // ইমেজ চেক করা (Listing এর মতো)
+    if (!req.file) {
+      return res.status(400).json({ message: 'Please upload a tag icon/image' });
     }
 
-    const imageUrl = `/uploads/tags/${req.file.filename}`;
+    // সঠিক পাথ তৈরি (Listing এর মতো)
+    const imageUrl = `/uploads/listings/${req.file.filename}`;
 
-    const tag = await Tag.create({
+    const newTag = await Tag.create({
       title,
       image: imageUrl,
     });
 
-    res.status(201).json(tag);
+    res.status(201).json(newTag);
   } catch (error) {
-    if (error.code === 11000) {
-      if (req.file) {
-        const uploadedPath = path.join(process.cwd(), 'uploads/tags', req.file.filename);
-        if (fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
-      }
-      return res.status(400).json({ message: 'This tag title already exists' });
+    // এরর হলে আপলোড হওয়া ইমেজটি ডিলিট করে দেওয়া (Listing এর মতো cleanup)
+    if (req.file) {
+      const uploadedPath = path.join(process.cwd(), 'uploads/listings', req.file.filename);
+      if (fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
     }
 
-    console.error('Tag Create Error:', error);
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Tag title already exists' });
+    }
     res.status(500).json({ message: error.message });
   }
 };
@@ -81,22 +80,24 @@ export const updateTag = async (req, res) => {
   try {
     const { id } = req.params;
     const tag = await Tag.findById(id);
+
     if (!tag) return res.status(404).json({ message: 'Tag not found' });
 
     let updateData = { title: req.body.title };
 
+    // যদি নতুন ইমেজ আপলোড করা হয়
     if (req.file) {
-      const relativePath = tag.image.startsWith('/') ? tag.image.slice(1) : tag.image;
-      const oldPath = path.join(process.cwd(), relativePath);
-
-      if (fs.existsSync(oldPath)) {
+      // পুরাতন ইমেজটি ডিলিট করা
+      const oldImagePath = path.join(process.cwd(), tag.image);
+      if (fs.existsSync(oldImagePath)) {
         try {
-          fs.unlinkSync(oldPath);
+          fs.unlinkSync(oldImagePath);
         } catch (err) {
-          console.error('File deletion error:', err.message);
+          console.error('Old tag image delete failed:', err);
         }
       }
-      updateData.image = `/uploads/tags/${req.file.filename}`;
+      // নতুন ইমেজের পাথ সেট করা
+      updateData.image = `/uploads/listings/${req.file.filename}`;
     }
 
     const updatedTag = await Tag.findByIdAndUpdate(
@@ -107,7 +108,6 @@ export const updateTag = async (req, res) => {
 
     res.status(200).json(updatedTag);
   } catch (error) {
-    console.error('Update Error:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -153,7 +153,7 @@ export const getCreatorRequests = async (req, res) => {
   try {
     const requests = await User.find({
       'creatorRequest.isApplied': true,
-      'creatorRequest.status': 'pending', 
+      'creatorRequest.status': 'pending',
       role: 'user',
     }).select('-password');
 
@@ -174,7 +174,7 @@ export const approveCreator = async (req, res) => {
           'creatorRequest.isApplied': false,
           'creatorRequest.status': 'approved',
           'creatorRequest.adminComment': 'Congratulations! Your creator account is approved.',
-          'creatorRequest.rejectionReason': '', 
+          'creatorRequest.rejectionReason': '',
         },
       },
       { new: true }
@@ -190,7 +190,7 @@ export const approveCreator = async (req, res) => {
 export const rejectCreator = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { reason, statusType } = req.body; 
+    const { reason, statusType } = req.body;
 
     const user = await User.findByIdAndUpdate(
       userId,
