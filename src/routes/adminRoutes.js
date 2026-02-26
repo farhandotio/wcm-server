@@ -13,6 +13,7 @@ import {
   deleteCategory,
   updateTag,
   deleteTag,
+  exportUsersExcel,
 } from '../controllers/adminController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 import upload from '../config/multer.js';
@@ -37,5 +38,6 @@ router.put('/reject-creator/:userId', rejectCreator);
 router.put('/update-status/:id', updateListingStatus);
 router.put('/toggle-status/:userId', toggleUserStatus);
 router.get('/listings', manageListings);
+router.get('/export-users', exportUsersExcel);
 
 export default router;

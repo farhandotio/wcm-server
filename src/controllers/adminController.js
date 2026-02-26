@@ -4,6 +4,7 @@ import Category from '../models/Category.js';
 import Tag from '../models/Tag.js';
 import path from 'path';
 import fs from 'fs';
+import ExcelJS from 'exceljs';
 
 export const createTag = async (req, res) => {
   try {
@@ -238,8 +239,8 @@ export const manageListings = async (req, res) => {
   try {
     const listings = await Listing.find()
       .populate('creatorId', 'firstName lastName username email')
-      .populate('category', 'title') 
-      .populate('culturalTags', 'title image') 
+      .populate('category', 'title')
+      .populate('culturalTags', 'title image')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -297,5 +298,77 @@ export const updateListingStatus = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const exportUsersExcel = async (req, res) => {
+  try {
+    const userCursor = User.find().select('-password').cursor();
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('All Users List');
+
+    worksheet.columns = [
+      { header: 'DATABASE ID', key: '_id', width: 30 },
+      { header: 'FIRST NAME', key: 'firstName', width: 15 },
+      { header: 'LAST NAME', key: 'lastName', width: 15 },
+      { header: 'FULL NAME', key: 'fullName', width: 25 },
+      { header: 'EMAIL', key: 'email', width: 30 },
+      { header: 'USERNAME', key: 'username', width: 20 },
+      { header: 'ROLE', key: 'role', width: 12 },
+      { header: 'ACCOUNT STATUS', key: 'status', width: 15 },
+      { header: 'COUNTRY', key: 'country', width: 15 },
+      { header: 'CREATOR REQ STATUS', key: 'creatorStatus', width: 18 },
+      { header: 'JOINED DATE', key: 'createdAt', width: 20 },
+    ];
+
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFEA580C' },
+    };
+
+    for (let user = await userCursor.next(); user != null; user = await userCursor.next()) {
+      const profile = user.profile || {};
+      const creatorRequest = user.creatorRequest || {};
+
+      worksheet.addRow({
+        _id: user._id.toString(),
+        firstName: user.firstName || 'N/A',
+        lastName: user.lastName || 'N/A',
+        fullName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'No Name',
+        email: user.email || 'N/A',
+        username: user.username || 'N/A',
+        role: (user.role || 'user').toUpperCase(),
+        status: (user.status || 'active').toUpperCase(),
+        country: profile.country || 'Not Set',
+        creatorStatus: creatorRequest.isApplied
+          ? (creatorRequest.status || 'pending').toUpperCase()
+          : 'NOT APPLIED',
+        createdAt: user.createdAt
+          ? user.createdAt.toISOString().replace('T', ' ').split('.')[0]
+          : 'N/A',
+      });
+    }
+
+    const fileName = `Users_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+
+    await workbook.xlsx.write(res);
+    return res.status(200).end();
+  } catch (error) {
+    console.error('CRITICAL EXPORT ERROR:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: 'Failed to generate excel report',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      });
+    }
   }
 };
