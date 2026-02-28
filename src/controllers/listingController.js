@@ -7,15 +7,61 @@ import Tag from '../models/Tag.js';
 export const getCategoriesAndTags = async (req, res) => {
   try {
     const categories = await Category.find().sort({ order: 1 });
-    const tags = await Tag.find().sort({ title: 1 });
+
+    const limit = parseInt(req.query.limit) || 10;
+    const page = parseInt(req.query.page) || 1;
+    const skip = (page - 1) * limit;
+
+    const tagsWithCount = await Tag.aggregate([
+      { $sort: { title: 1 } },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $lookup: {
+          from: 'listings',
+          localField: '_id',
+          foreignField: 'culturalTags',
+          as: 'matchedListings',
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          title: 1,
+          image: 1,
+          listingCount: {
+            $size: {
+              $filter: {
+                input: '$matchedListings',
+                as: 'listing',
+                cond: { $eq: ['$$listing.status', 'approved'] },
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    const totalTags = await Tag.countDocuments();
 
     res.status(200).json({
+      success: true,
       categories: categories || [],
-      tags: tags || [],
+      tags: tagsWithCount || [],
+      pagination: {
+        totalTags,
+        currentPage: page,
+        totalPages: Math.ceil(totalTags / limit),
+        hasMore: page * limit < totalTags,
+      },
     });
   } catch (error) {
     console.error('Meta Data Error:', error);
-    res.status(500).json({ message: 'Error fetching meta data', error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching meta data',
+      error: error.message,
+    });
   }
 };
 
@@ -147,9 +193,10 @@ export const updateListing = async (req, res) => {
 export const getPublicListings = async (req, res) => {
   try {
     const { filter, search, category, region, creatorId, limit, page } = req.query;
+
     let query = { status: 'approved' };
 
-    // ১. টাইম ফিল্টার ফিক্স (Error 500 এখান থেকেই আসছিল)
+    // Time filter logic
     const now = new Date();
     if (filter === 'Today') {
       const startOfDay = new Date();
@@ -157,17 +204,19 @@ export const getPublicListings = async (req, res) => {
       query.createdAt = { $gte: startOfDay };
     } else if (filter === 'This week') {
       const startOfWeek = new Date();
-      // ৭ দিন আগের সময় সেট করা
       startOfWeek.setDate(now.getDate() - 7);
       startOfWeek.setHours(0, 0, 0, 0);
       query.createdAt = { $gte: startOfWeek };
     }
 
-    // ২. অন্যান্য ফিল্টার
+    // Category, Region, Creator filters
     if (creatorId) query.creatorId = creatorId;
-    if (category && category !== 'All') query.category = category;
-    if (region) query.region = region;
+    if (category && category !== 'All') {
+      query.category = category;
+    }
+    if (region && region !== 'All') query.region = region;
 
+    // Search filter logic (Title, Country, Tradition) with case-insensitive regex
     if (search) {
       query.$or = [
         { title: { $regex: search, $options: 'i' } },
@@ -176,20 +225,31 @@ export const getPublicListings = async (req, res) => {
       ];
     }
 
-    // ৩. প্যাজিনেশন লজিক
+    // Pagination logic
     const resPerPage = parseInt(limit) || 20;
     const currentPage = parseInt(page) || 1;
     const skip = resPerPage * (currentPage - 1);
 
-    // ৪. ডাটা ফেচিং
+    // Data fetching login
+    // Searching, filtering, and pagination are done in the query, but sorting is done in-memory after fetching to ensure promoted listings are always on top regardless of other filters.
     let listings = await Listing.find(query)
       .populate('creatorId', 'username profile')
       .populate('category', 'title')
-      .sort({ isPromoted: -1, views: -1, createdAt: -1 })
+      .populate('culturalTags', 'title image')
+      .sort({
+        isPromoted: -1,
+        'promotion.level': -1,
+        views: -1,
+        createdAt: -1,
+      })
       .limit(resPerPage)
       .skip(skip)
       .lean();
 
+    // Total count for pagination
+    const totalListings = await Listing.countDocuments(query);
+
+    // Favorites logic with safety checks
     const currentUserId = req.user ? req.user._id.toString() : null;
 
     const formattedListings = listings.map((item) => {
@@ -203,18 +263,29 @@ export const getPublicListings = async (req, res) => {
       };
     });
 
-    res.status(200).json(formattedListings);
+    // Sending response with total count for pagination
+    res.status(200).json({
+      success: true,
+      total: totalListings,
+      count: formattedListings.length,
+      currentPage,
+      listings: formattedListings,
+    });
   } catch (error) {
-    console.error('Server Error:', error);
-    res.status(500).json({ message: 'Server Error', details: error.message });
+    console.error('Public Listings Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      details: error.message,
+    });
   }
 };
 
 export const getCreatorListingCount = async (req, res) => {
   try {
-    const count = await Listing.countDocuments({ 
-      creatorId: req.params.creatorId, 
-      status: 'approved' 
+    const count = await Listing.countDocuments({
+      creatorId: req.params.creatorId,
+      status: 'approved',
     });
     res.status(200).json({ count });
   } catch (err) {
