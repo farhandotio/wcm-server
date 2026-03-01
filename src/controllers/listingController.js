@@ -4,6 +4,7 @@ import path from 'path';
 import Category from '../models/Category.js';
 import Tag from '../models/Tag.js';
 import mongoose from 'mongoose';
+const clickCooldowns = new Map();
 
 export const getCategoriesAndTags = async (req, res) => {
   try {
@@ -386,15 +387,34 @@ export const getPublicListings = async (req, res) => {
 
 export const handlePpcClick = async (req, res) => {
   try {
-    const listing = await Listing.findById(req.params.id);
+    const listingId = req.params.id;
+    const userIP = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const cacheKey = `${userIP}_${listingId}`;
+    const now = Date.now();
 
-    // Cost per click, defaulting to 0.1 if not set
+    const listing = await Listing.findById(listingId);
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+
+    // Spam prevention logic (using in-memory Map to track clicks per IP and listing)
+    const lastClick = clickCooldowns.get(cacheKey);
+    const isSpam = lastClick && now - lastClick < 60000;
+
+    // PPC Logic
     const cost = listing.promotion.costPerClick || 0.1;
 
-    if (listing && listing.promotion.type === 'ppc' && listing.promotion.ppcBalance >= cost) {
+    if (
+      !isSpam &&
+      listing.promotion.type === 'ppc' &&
+      listing.isPromoted &&
+      listing.promotion.ppcBalance >= cost
+    ) {
+      // Balance deduction logic
       listing.promotion.ppcBalance = Number((listing.promotion.ppcBalance - cost).toFixed(2));
 
-      // if balance is insufficient after deduction, demote the listing
+      // ৩. Total Clicks Update
+      listing.promotion.totalClicks = (listing.promotion.totalClicks || 0) + 1;
+
+      // Auto-demote logic if balance is insufficient after deduction
       if (listing.promotion.ppcBalance < cost) {
         listing.isPromoted = false;
         listing.promotion.level = 0;
@@ -402,10 +422,21 @@ export const handlePpcClick = async (req, res) => {
       }
 
       await listing.save();
+
+      // Set click cooldown for this IP and listing to prevent spam clicks
+      clickCooldowns.set(cacheKey, now);
+
+      setTimeout(() => clickCooldowns.delete(cacheKey), 300000);
     }
 
-    res.status(200).json({ success: true });
+    // Redirect to the listing's website link
+    res.status(200).json({
+      success: true,
+      redirectUrl: listing.websiteLink,
+      charged: !isSpam,
+    });
   } catch (error) {
+    console.error('PPC Click Error:', error);
     res.status(500).json({ message: error.message });
   }
 };

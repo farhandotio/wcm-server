@@ -70,29 +70,15 @@ const listingSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
-    
+
     // Promotion fields
     promotion: {
-      level: {
-        type: Number,
-        default: 0,
-      },
-      type: {
-        type: String,
-        enum: ['none', 'boost', 'ppc'],
-        default: 'none',
-      },
-      expiresAt: {
-        type: Date,
-      },
-      ppcBalance: {
-        type: Number,
-        default: 0,
-      },
-      costPerClick: {
-        type: Number,
-        default: 0,
-      },
+      level: { type: Number, default: 0 },
+      type: { type: String, enum: ['none', 'boost', 'ppc'], default: 'none' },
+      expiresAt: { type: Date },
+      ppcBalance: { type: Number, default: 0 },
+      costPerClick: { type: Number, default: 0 },
+      totalClicks: { type: Number, default: 0 },
     },
     isPromoted: {
       type: Boolean,
