@@ -284,36 +284,33 @@ export const updateListing = async (req, res) => {
 
 export const getPublicListings = async (req, res) => {
   try {
-    // tradition প্যারামিটারটি অ্যাড করা হয়েছে
     const { filter, search, category, region, tradition, creatorId, limit, page } = req.query;
 
     let query = { status: 'approved' };
 
-    // ১. স্মার্ট ক্যাটাগরি ফিল্টার (নাম বা আইডি চেক)
+    // Category filter logic with support for both ID and title
     if (category && category !== 'All' && category !== 'undefined') {
       if (mongoose.Types.ObjectId.isValid(category)) {
         query.category = category;
       } else {
-        // যদি টেক্সট আসে (যেমন: 'Food'), তবে ডাটাবেস থেকে ওই নামের আইডি খুঁজে বের করবে
         const foundCategory = await Category.findOne({
           title: { $regex: category, $options: 'i' },
         });
         if (foundCategory) {
           query.category = foundCategory._id;
         } else {
-          // যদি ওই নামে ক্যাটাগরি না থাকে, তবে রেজাল্ট খালি আসবে (যাতে ক্র্যাশ না করে)
           query.category = new mongoose.Types.ObjectId();
         }
       }
     }
 
-    // ২. রিজিয়ন এবং ট্র্যাডিশন (ট্যাডিশন ড্রপডাউনের জন্য)
+    // Region and Tradition filters with case-insensitive regex
     if (region && region !== 'All') query.region = region;
     if (tradition && tradition !== 'All') {
       query.tradition = { $regex: tradition, $options: 'i' };
     }
 
-    // ৩. টাইম ফিল্টার (আপনার আগের লজিক)
+    // Time filter logic
     const now = new Date();
     if (filter === 'Today') {
       const startOfDay = new Date();
@@ -328,7 +325,7 @@ export const getPublicListings = async (req, res) => {
 
     if (creatorId) query.creatorId = creatorId;
 
-    // ৪. সার্চ লজিক
+    // Search filter logic (Title, Country, Tradition) with case-insensitive regex
     if (search) {
       query.$or = [
         { title: { $regex: search, $options: 'i' } },
@@ -337,12 +334,11 @@ export const getPublicListings = async (req, res) => {
       ];
     }
 
-    // ৫. পেজিনেশন
-    const resPerPage = parseInt(limit) || 10; // ডিফল্ট ১০ সেট করা ভালো স্লাইডারের জন্য
+    // Pagination logic
+    const resPerPage = parseInt(limit) || 10;
     const currentPage = parseInt(page) || 1;
     const skip = resPerPage * (currentPage - 1);
 
-    // ৬. ডাটা ফেচিং ও সর্টিং (PPC & Boost Level Priority)
     let listings = await Listing.find(query)
       .populate('creatorId', 'username profile')
       .populate('category', 'title')
