@@ -18,6 +18,7 @@ import {
   updateCategoryOrder,
   getAllTransactions,
   exportTransactionsExcel,
+  updatePpcBalanceManual
 } from '../controllers/adminController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 import upload from '../config/multer.js';
@@ -50,5 +51,6 @@ router.put('/approve-creator/:userId', approveCreator);
 router.put('/reject-creator/:userId', rejectCreator);
 router.put('/update-status/:id', updateListingStatus);
 router.put('/toggle-status/:userId', toggleUserStatus);
+router.put('/update-ppc-balance/:id', updatePpcBalanceManual);
 
 export default router;

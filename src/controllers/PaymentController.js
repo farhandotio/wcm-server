@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import Transaction from '../models/Transaction.js';
 import Listing from '../models/Listing.js';
 import User from '../models/User.js';
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -213,61 +213,128 @@ export const handleStripeWebhook = async (req, res) => {
 export const generateInvoice = async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // Constants from your requirements
+    const BUSINESS_NAME = "World Culture Marketplace";
+    const BUSINESS_ADDRESS = "123 Culture Street, Berlin, Germany";
+    const BUSINESS_VAT_NUMBER = "DE123456789";
+    const DEFAULT_VAT_RATE = 19; // 19%
+
     const transaction = await Transaction.findById(id)
-      .populate('creator', 'firstName lastName email profile')
+      .populate('creator', 'firstName lastName email')
       .populate('listing', 'title');
 
-    if (!transaction) return res.status(404).json({ message: 'Transaction record not found' });
+    if (!transaction) {
+      return res.status(404).json({ message: 'Transaction record not found' });
+    }
 
     const doc = new jsPDF();
     const brandOrange = [249, 115, 22];
 
-    // Header Design
+    // --- Header ---
     doc.setFillColor(...brandOrange);
     doc.rect(0, 0, 210, 40, 'F');
-    doc.setFontSize(22);
+    
+    doc.setFontSize(24);
     doc.setTextColor(255, 255, 255);
-    doc.text('OFFICIAL RECEIPT', 14, 25);
-
-    // Meta Info
-    doc.setFontSize(10);
-    doc.text(`Invoice: ${transaction.invoiceNumber}`, 140, 20);
-    doc.text(`Date: ${new Date(transaction.createdAt).toLocaleDateString()}`, 140, 28);
-
-    // Bill Details
-    doc.setTextColor(0, 0, 0);
     doc.setFont('helvetica', 'bold');
-    doc.text('BILL TO:', 14, 55);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`${transaction.creator?.firstName} ${transaction.creator?.lastName}`, 14, 62);
-    doc.text(transaction.creator?.email || '', 14, 68);
+    doc.text('INVOICE', 14, 25);
 
-    // Table
+    // --- Meta Info ---
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    const invNo = transaction.invoiceNumber || `INV-${transaction._id.toString().slice(-6).toUpperCase()}`;
+    doc.text(`Invoice Number: ${invNo}`, 145, 18);
+    doc.text(`Date Issued: ${new Date(transaction.createdAt).toLocaleDateString()}`, 145, 24);
+    doc.text(`Payment Status: PAID`, 145, 30);
+
+    // --- Business & Client Details ---
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    
+    // Company Side
+    doc.setFont('helvetica', 'bold');
+    doc.text('FROM:', 14, 50);
+    doc.setFont('helvetica', 'normal');
+    doc.text(BUSINESS_NAME, 14, 56);
+    doc.text(BUSINESS_ADDRESS, 14, 62);
+    doc.text(`VAT: ${BUSINESS_VAT_NUMBER}`, 14, 68);
+
+    // Client Side
+    doc.setFont('helvetica', 'bold');
+    doc.text('BILL TO:', 120, 50);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${transaction.creator?.firstName} ${transaction.creator?.lastName}`, 120, 56);
+    doc.text(transaction.creator?.email || 'N/A', 120, 62);
+
+    // --- Calculations ---
+    const totalAmount = transaction.amountPaid || 0;
+    const netAmount = totalAmount / (1 + DEFAULT_VAT_RATE / 100);
+    const vatAmount = totalAmount - netAmount;
+
+    // --- Items Table ---
     autoTable(doc, {
       startY: 80,
-      head: [['Description', 'Type', 'Amount']],
+      head: [['Service Description', 'Type', 'Net Amount', 'VAT', 'Total']],
       body: [
         [
-          `Promotion for: ${transaction.listing?.title || 'Culture Asset'}`,
+          `Promotion: ${transaction.listing?.title || 'Culture Asset'}`,
           transaction.packageType.toUpperCase(),
-          `${transaction.currency.toUpperCase()} ${transaction.amountPaid.toFixed(2)}`,
+          `${transaction.currency.toUpperCase()} ${netAmount.toFixed(2)}`,
+          `${DEFAULT_VAT_RATE}%`,
+          `${transaction.currency.toUpperCase()} ${totalAmount.toFixed(2)}`,
         ],
       ],
-      headStyles: { fillColor: brandOrange },
+      headStyles: { 
+        fillColor: brandOrange,
+        textColor: [255, 255, 255],
+        fontStyle: 'bold'
+      },
+      styles: { fontSize: 9, cellPadding: 4 },
+      columnStyles: {
+        4: { halign: 'right', fontStyle: 'bold' }
+      }
     });
 
-    // Totals
-    const finalY = doc.lastAutoTable.finalY + 15;
-    doc.setFont('helvetica', 'bold');
-    doc.text(
-      `Total Paid: ${transaction.currency.toUpperCase()} ${transaction.amountPaid.toFixed(2)}`,
-      140,
-      finalY
-    );
+    // --- Totals Summary ---
+    const finalY = doc.lastAutoTable.finalY + 10;
+    
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Subtotal (Net):', 140, finalY);
+    doc.text(`${transaction.currency.toUpperCase()} ${netAmount.toFixed(2)}`, 196, finalY, { align: 'right' });
 
+    doc.text(`VAT (${DEFAULT_VAT_RATE}%):`, 140, finalY + 6);
+    doc.text(`${transaction.currency.toUpperCase()} ${vatAmount.toFixed(2)}`, 196, finalY + 6, { align: 'right' });
+
+    doc.setLineWidth(0.5);
+    doc.line(140, finalY + 10, 196, finalY + 10);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('Total Paid:', 140, finalY + 18);
+    doc.text(`${transaction.currency.toUpperCase()} ${totalAmount.toFixed(2)}`, 196, finalY + 18, { align: 'right' });
+
+    // --- Footer ---
+    const pageHeight = doc.internal.pageSize.height;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'italic');
+    doc.setTextColor(150, 150, 150);
+    doc.text('This is a computer-generated document. No signature is required.', 105, pageHeight - 20, { align: 'center' });
+    doc.text('Thank you for choosing World Culture Marketplace!', 105, pageHeight - 15, { align: 'center' });
+
+    // --- Finalize and Send ---
+    const pdfBuffer = doc.output('arraybuffer');
     res.setHeader('Content-Type', 'application/pdf');
-    res.send(Buffer.from(doc.output('arraybuffer')));
+    res.setHeader('Content-Disposition', `inline; filename=Invoice-${invNo}.pdf`);
+    res.send(Buffer.from(pdfBuffer));
+
   } catch (error) {
-    res.status(500).json({ message: 'Invoice generation failed' });
+    console.error('Invoice Generation Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to generate invoice',
+      error: error.message 
+    });
   }
 };

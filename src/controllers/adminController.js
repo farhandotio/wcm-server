@@ -6,6 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import ExcelJS from 'exceljs';
 import Transaction from '../models/Transaction.js';
+import Analytics from '../models/Analytics.js';
 
 export const createTag = async (req, res) => {
   try {
@@ -249,15 +250,37 @@ export const manageListings = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    const formattedListings = listings.map((item) => ({
-      ...item,
-      creatorName: item.creatorId
-        ? `${item.creatorId.firstName || ''} ${item.creatorId.lastName || ''}`.trim() ||
-          item.creatorId.username
-        : 'Unknown Creator',
-      favoritesCount: item.favorites?.length || 0,
-      categoryName: item.category?.title || 'Uncategorized',
-    }));
+    const now = new Date();
+
+    const formattedListings = listings.map((item) => {
+      // PPC Balance calculation
+      const ppcBalance = item.promotion?.ppc?.isActive ? (item.promotion.ppc.ppcBalance || 0) : 0;
+
+      // Boost Remaining Time calculation
+      let boostRemaining = 'No Active Boost';
+      if (item.promotion?.boost?.isActive && item.promotion?.boost?.expiresAt) {
+        const expiresAt = new Date(item.promotion.boost.expiresAt);
+        if (expiresAt > now) {
+          const diffMs = expiresAt - now;
+          const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+          const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+          boostRemaining = `${diffDays}d ${diffHours}h left`;
+        } else {
+          boostRemaining = 'Expired';
+        }
+      }
+
+      return {
+        ...item,
+        creatorName: item.creatorId
+          ? `${item.creatorId.firstName || ''} ${item.creatorId.lastName || ''}`.trim() || item.creatorId.username
+          : 'Unknown Creator',
+        categoryName: item.category?.title || 'Uncategorized',
+        ppcStatus: ppcBalance.toFixed(2),
+        boostStatus: boostRemaining,
+        isCurrentlyPromoted: item.isPromoted && (ppcBalance > 0 || boostRemaining.includes('left'))
+      };
+    });
 
     res.status(200).json(formattedListings);
   } catch (error) {
@@ -279,28 +302,19 @@ export const deleteListingByAdmin = async (req, res) => {
 export const updateListingStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, rejectionReason } = req.body;
+    const { status, rejectionReason } = req.body; 
 
-    let updateFields = { status };
+    const listing = await Listing.findById(id);
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
+    listing.status = status;
     if (status === 'rejected') {
-      updateFields.rejectionReason = rejectionReason || 'No reason provided';
-    } else if (status === 'approved') {
-      updateFields.rejectionReason = '';
+      listing.rejectionReason = rejectionReason || 'Does not follow community guidelines.';
+      listing.isPromoted = false; 
     }
 
-    const updatedListing = await Listing.findByIdAndUpdate(
-      id,
-      { $set: updateFields },
-      { returnDocument: 'after' }
-    ).populate('creatorId', 'firstName lastName email');
-
-    if (!updatedListing) return res.status(404).json({ message: 'Listing not found' });
-
-    res.status(200).json({
-      message: `Listing is now ${status}`,
-      updatedListing,
-    });
+    await listing.save();
+    res.status(200).json({ success: true, message: `Listing ${status} successfully.` });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -374,45 +388,132 @@ export const exportUsersExcel = async (req, res) => {
 
 export const getAdminStats = async (req, res) => {
   try {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const now = new Date();
 
-    const [totalUsers, totalListings, pendingRequests, promotedCount, revenueData] =
-      await Promise.all([
-        User.countDocuments(),
-        Listing.countDocuments(),
-        User.countDocuments({
-          'creatorRequest.status': 'pending',
-          'creatorRequest.isApplied': true,
-        }),
-        Listing.countDocuments({ isPromoted: true }),
+    const [
+      totalUsers, 
+      totalCreators, 
+      totalListings, 
+      pendingListings,
+      pendingRequests,
+      transactions,
+      activePpcCampaigns,
+      activeBoostCampaigns
+    ] = await Promise.all([
+      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: 'creator' }),
+      Listing.countDocuments(),
+      Listing.countDocuments({ status: 'pending' }),
+      User.countDocuments({ 'creatorRequest.status': 'pending', 'creatorRequest.isApplied': true }),
+      Transaction.find({ status: 'completed' }),
+      Listing.countDocuments({ 
+        'promotion.ppc.isActive': true, 
+        'promotion.ppc.ppcBalance': { $gt: 0 } 
+      }),
+      Listing.countDocuments({ 
+        'promotion.boost.isActive': true, 
+        'promotion.boost.expiresAt': { $gt: now } 
+      }),
+    ]);
 
-        Transaction.aggregate([
-          { $match: { status: 'completed', createdAt: { $gte: thirtyDaysAgo } } },
-          {
-            $group: {
-              _id: null,
-              totalRevenue: { $sum: '$amountInEUR' },
-              totalVat: { $sum: '$vatAmount' },
-              transactionCount: { $sum: 1 },
-            },
-          },
-        ]),
-      ]);
+    const totalRevenue = transactions.reduce((acc, curr) => acc + (curr.amountPaid || 0), 0);
+    const ppcRevenue = transactions
+      .filter(t => t.packageType === 'ppc')
+      .reduce((acc, curr) => acc + (curr.amountPaid || 0), 0);
+    const boostRevenue = transactions
+      .filter(t => t.packageType === 'boost')
+      .reduce((acc, curr) => acc + (curr.amountPaid || 0), 0);
 
-    const stats = revenueData[0] || { totalRevenue: 0, totalVat: 0, transactionCount: 0 };
+    const categoryDist = await Listing.aggregate([
+      {
+        $group: {
+          _id: "$category",
+          value: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: "categories", 
+          localField: "_id",
+          foreignField: "_id",
+          as: "catDetails"
+        }
+      },
+      { $unwind: "$catDetails" },
+      {
+        $project: {
+          _id: 0,
+          name: "$catDetails.title",
+          value: 1
+        }
+      }
+    ]);
+
+    const dailyStats = await Transaction.aggregate([
+      { $match: { createdAt: { $gte: sevenDaysAgo }, status: 'completed' } },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+          revenue: { $sum: "$amountPaid" }
+        }
+      },
+      { $sort: { "_id": 1 } }
+    ]);
+
+    const userGrowth = await User.aggregate([
+      { $match: { createdAt: { $gte: sevenDaysAgo } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+          newUsers: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id": 1 } }
+    ]);
+
+    const topPromotedListings = await Listing.find({ isPromoted: true })
+      .sort({ 'promotion.level': -1 })
+      .limit(5)
+      .select('title promotion.level promotion.ppc.isActive promotion.boost.isActive')
+      .lean();
 
     res.status(200).json({
-      totalUsers,
-      totalListings,
-      pendingRequests,
-      promotedListings: promotedCount,
-      revenueLast30Days: stats.totalRevenue.toFixed(2),
-      vatLast30Days: stats.totalVat.toFixed(2),
-      totalTransactions: stats.transactionCount,
+      success: true,
+      cards: {
+        totalRevenue: totalRevenue.toFixed(2),
+        ppcRevenue: ppcRevenue.toFixed(2),
+        boostRevenue: boostRevenue.toFixed(2),
+        totalUsers,
+        totalCreators,
+        totalListings,
+        pendingListings,
+        pendingRequests,
+        activeCampaigns: activePpcCampaigns + activeBoostCampaigns,
+        activePpc: activePpcCampaigns,
+        activeBoost: activeBoostCampaigns
+      },
+      charts: {
+        categories: categoryDist,
+        revenueAndUsers: dailyStats.map(ds => {
+          const userEntry = userGrowth.find(ug => ug._id === ds._id);
+          return {
+            date: ds._id,
+            revenue: ds.revenue,
+            users: userEntry ? userEntry.newUsers : 0
+          };
+        }),
+        topPromoted: topPromotedListings.map(l => ({
+          name: l.title.substring(0, 15) + '...',
+          score: l.promotion.level,
+          type: l.promotion.ppc?.isActive ? 'PPC' : 'Boost'
+        }))
+      }
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Admin Stats Error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -427,19 +528,6 @@ export const updateCategoryOrder = async (req, res) => {
     await Promise.all(updatePromises);
 
     res.status(200).json({ message: 'Order updated successfully' });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-export const getAllTransactions = async (req, res) => {
-  try {
-    const transactions = await Transaction.find()
-      .populate('creator', 'firstName lastName email username')
-      .populate('listing', 'title')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json(transactions);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -513,5 +601,59 @@ export const exportTransactionsExcel = async (req, res) => {
   } catch (error) {
     console.error('TRANSACTION EXPORT ERROR:', error);
     if (!res.headersSent) res.status(500).send('Export failed');
+  }
+};
+
+export const getAllTransactions = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search = '' } = req.query;
+    
+    let query = { status: 'completed' };
+    
+    const transactions = await Transaction.find(query)
+      .populate('creator', 'firstName lastName email')
+      .populate('listing', 'title')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const count = await Transaction.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      transactions,
+      totalPages: Math.ceil(count / limit),
+      currentPage: page,
+      totalCount: count
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const updatePpcBalanceManual = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amountToAdd } = req.body; 
+
+    const listing = await Listing.findById(id);
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+
+    const currentBalance = Number(listing.promotion?.ppc?.ppcBalance) || 0;
+    const newBalance = currentBalance + Number(amountToAdd);
+
+    listing.promotion.ppc.ppcBalance = newBalance;
+    listing.promotion.ppc.isActive = newBalance > 0;
+    listing.isPromoted = true;
+    
+    await listing.save();
+
+    res.status(200).json({ 
+      success: true, 
+      message: `Successfully added €${amountToAdd}. New balance: €${newBalance}`,
+      newBalance 
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
