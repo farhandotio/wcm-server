@@ -272,6 +272,7 @@ export const deleteUserAccount = async (req, res) => {
   }
 };
 
+// ৯. Public Profile View
 export const getPublicProfile = async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -297,84 +298,93 @@ export const getPublicProfile = async (req, res) => {
   }
 };
 
-// ৯. Get Famous Creators (Public) with Pagination, Sorting & Filtering
+// ১০. Famous Creators List with Advanced Filtering, Sorting, and Pagination
 export const getFamousCreators = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      sortBy = 'listings',
-      search = '', 
-      country = '' 
-    } = req.query;
+    const { limit = 10, offset = 0, sortBy = 'listings', search = '', country = '' } = req.query;
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const parsedLimit = parseInt(limit);
+    const parsedOffset = parseInt(offset);
 
-    let userQuery = { 
-      role: 'creator', 
-      status: 'active' 
+    let userQuery = {
+      role: 'creator',
+      status: 'active',
     };
 
+    // 🔎 Search filter
     if (search) {
       userQuery.$or = [
         { firstName: { $regex: search, $options: 'i' } },
         { lastName: { $regex: search, $options: 'i' } },
-        { username: { $regex: search, $options: 'i' } }
+        { username: { $regex: search, $options: 'i' } },
       ];
     }
 
+    // 🌍 Country filter
     if (country) {
       userQuery['profile.country'] = { $regex: country, $options: 'i' };
     }
 
     const aggregatePipeline = [
       { $match: userQuery },
+
       {
         $lookup: {
-          from: 'listings', 
+          from: 'listings',
           localField: '_id',
           foreignField: 'creatorId',
-          as: 'allListings'
-        }
+          as: 'allListings',
+        },
       },
+
       {
         $project: {
           firstName: 1,
           lastName: 1,
           username: 1,
           profile: 1,
+
           totalListings: {
             $size: {
               $filter: {
                 input: '$allListings',
                 as: 'l',
-                cond: { $eq: ['$$l.status', 'approved'] }
-              }
-            }
+                cond: { $eq: ['$$l.status', 'approved'] },
+              },
+            },
           },
+
           totalViews: {
             $sum: {
               $map: {
                 input: '$allListings',
                 as: 'l',
-                in: { $cond: [{ $eq: ['$$l.status', 'approved'] }, '$$l.views', 0] }
-              }
-            }
-          }
-        }
+                in: {
+                  $cond: [{ $eq: ['$$l.status', 'approved'] }, '$$l.views', 0],
+                },
+              },
+            },
+          },
+        },
       },
-      { $match: { totalListings: { $gt: 0 } } }
+
+      { $match: { totalListings: { $gt: 0 } } },
     ];
 
+    // 🔥 Sorting
     const sortField = sortBy === 'views' ? { totalViews: -1 } : { totalListings: -1 };
+
     aggregatePipeline.push({ $sort: sortField });
 
+    // ✅ Count pipeline (pagination total)
     const countPipeline = [...aggregatePipeline];
-    aggregatePipeline.push({ $skip: skip }, { $limit: parseInt(limit) });
+
+    // ✅ OFFSET-BASED PAGINATION
+    aggregatePipeline.push({ $skip: parsedOffset }, { $limit: parsedLimit });
 
     const [creators, totalCountData] = await Promise.all([
       User.aggregate(aggregatePipeline),
-      User.aggregate([...countPipeline, { $count: 'total' }])
+      User.aggregate([...countPipeline, { $count: 'total' }]),
     ]);
 
     const totalCreators = totalCountData[0]?.total || 0;
@@ -384,10 +394,10 @@ export const getFamousCreators = async (req, res) => {
       data: creators,
       pagination: {
         total: totalCreators,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(totalCreators / limit)
-      }
+        limit: parsedLimit,
+        offset: parsedOffset,
+        hasMore: parsedOffset + parsedLimit < totalCreators,
+      },
     });
   } catch (error) {
     console.error('Famous Creators Tactical Error:', error);
