@@ -10,6 +10,7 @@ import {
   updateCreatorProfile,
   deleteUserAccount,
   getPublicProfile,
+  getFamousCreators,
 } from '../controllers/userController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
@@ -22,6 +23,7 @@ router.delete('/delete-account', authMiddleware, deleteUserAccount);
 
 router.get('/me', authMiddleware, getMyProfile);
 router.get('/profile/:id', getPublicProfile);
+router.get('/famous-creators', getFamousCreators);
 
 router.put(
   '/update-profile',

@@ -296,3 +296,101 @@ export const getPublicProfile = async (req, res) => {
     res.status(500).json({ message: 'Internal Server Error' });
   }
 };
+
+// ৯. Get Famous Creators (Public) with Pagination, Sorting & Filtering
+export const getFamousCreators = async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 10, 
+      sortBy = 'listings',
+      search = '', 
+      country = '' 
+    } = req.query;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    let userQuery = { 
+      role: 'creator', 
+      status: 'active' 
+    };
+
+    if (search) {
+      userQuery.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { username: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    if (country) {
+      userQuery['profile.country'] = { $regex: country, $options: 'i' };
+    }
+
+    const aggregatePipeline = [
+      { $match: userQuery },
+      {
+        $lookup: {
+          from: 'listings', 
+          localField: '_id',
+          foreignField: 'creatorId',
+          as: 'allListings'
+        }
+      },
+      {
+        $project: {
+          firstName: 1,
+          lastName: 1,
+          username: 1,
+          profile: 1,
+          totalListings: {
+            $size: {
+              $filter: {
+                input: '$allListings',
+                as: 'l',
+                cond: { $eq: ['$$l.status', 'approved'] }
+              }
+            }
+          },
+          totalViews: {
+            $sum: {
+              $map: {
+                input: '$allListings',
+                as: 'l',
+                in: { $cond: [{ $eq: ['$$l.status', 'approved'] }, '$$l.views', 0] }
+              }
+            }
+          }
+        }
+      },
+      { $match: { totalListings: { $gt: 0 } } }
+    ];
+
+    const sortField = sortBy === 'views' ? { totalViews: -1 } : { totalListings: -1 };
+    aggregatePipeline.push({ $sort: sortField });
+
+    const countPipeline = [...aggregatePipeline];
+    aggregatePipeline.push({ $skip: skip }, { $limit: parseInt(limit) });
+
+    const [creators, totalCountData] = await Promise.all([
+      User.aggregate(aggregatePipeline),
+      User.aggregate([...countPipeline, { $count: 'total' }])
+    ]);
+
+    const totalCreators = totalCountData[0]?.total || 0;
+
+    res.status(200).json({
+      success: true,
+      data: creators,
+      pagination: {
+        total: totalCreators,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(totalCreators / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Famous Creators Tactical Error:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+};
