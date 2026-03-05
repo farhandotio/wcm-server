@@ -244,10 +244,27 @@ export const getPublicListings = async (req, res) => {
     if (creatorId) query.creatorId = creatorId;
 
     if (search) {
+      const [matchingTags, matchingCategories] = await Promise.all([
+        mongoose
+          .model('Tag')
+          .find({ title: { $regex: search, $options: 'i' } })
+          .select('_id')
+          .lean(),
+        mongoose
+          .model('Category')
+          .find({ title: { $regex: search, $options: 'i' } })
+          .select('_id')
+          .lean(),
+      ]);
+
+      const tagIds = matchingTags.map((t) => t._id);
+      const catIds = matchingCategories.map((c) => c._id);
+
       query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { country: { $regex: search, $options: 'i' } },
-        { tradition: { $regex: search, $options: 'i' } },
+        { $text: { $search: search } },
+
+        { culturalTags: { $in: tagIds } },
+        { category: { $in: catIds } },
       ];
     }
 

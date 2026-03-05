@@ -37,7 +37,13 @@ const listingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-listingSchema.index({ title: 'text', country: 'text', tradition: 'text', description: 'text' });
+listingSchema.index({
+  title: 'text',
+  description: 'text',
+  country: 'text',
+  region: 'text',
+  tradition: 'text',
+});
 
 const Listing = mongoose.model('Listing', listingSchema);
 export default Listing;
