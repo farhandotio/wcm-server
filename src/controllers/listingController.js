@@ -11,9 +11,73 @@ import Analytics from '../models/Analytics.js';
 const clickCooldowns = new Map();
 const viewCache = new Map();
 
+// export const getCategoriesAndTags = async (req, res) => {
+//   try {
+//     const categories = await Category.find().sort({ order: 1 });
+
+//     const limit = parseInt(req.query.limit) || 10;
+//     const page = parseInt(req.query.page) || 1;
+//     const skip = (page - 1) * limit;
+
+//     const tagsWithCount = await Tag.aggregate([
+//       { $sort: { title: 1 } },
+//       { $skip: skip },
+//       { $limit: limit },
+//       {
+//         $lookup: {
+//           from: 'listings',
+//           localField: '_id',
+//           foreignField: 'culturalTags',
+//           as: 'matchedListings',
+//         },
+//       },
+//       {
+//         $project: {
+//           _id: 1,
+//           title: 1,
+//           image: 1,
+//           listingCount: {
+//             $size: {
+//               $filter: {
+//                 input: '$matchedListings',
+//                 as: 'listing',
+//                 cond: { $eq: ['$$listing.status', 'approved'] },
+//               },
+//             },
+//           },
+//         },
+//       },
+//     ]);
+
+//     const totalTags = await Tag.countDocuments();
+
+//     res.status(200).json({
+//       success: true,
+//       categories: categories || [],
+//       tags: tagsWithCount || [],
+//       pagination: {
+//         totalTags,
+//         currentPage: page,
+//         totalPages: Math.ceil(totalTags / limit),
+//         hasMore: page * limit < totalTags,
+//       },
+//     });
+//   } catch (error) {
+//     console.error('Meta Data Error:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Error fetching meta data',
+//       error: error.message,
+//     });
+//   }
+// };
+
 export const getCategoriesAndTags = async (req, res) => {
   try {
-    const categories = await Category.find().sort({ order: 1 });
+    const [categories, regions] = await Promise.all([
+      Category.find().sort({ order: 1 }).lean(),
+      mongoose.model('Listing').distinct('region', { status: 'approved' }),
+    ]);
 
     const limit = parseInt(req.query.limit) || 10;
     const page = parseInt(req.query.page) || 1;
@@ -51,9 +115,12 @@ export const getCategoriesAndTags = async (req, res) => {
 
     const totalTags = await Tag.countDocuments();
 
+    const sortedRegions = regions.filter(Boolean).sort();
+
     res.status(200).json({
       success: true,
       categories: categories || [],
+      regions: sortedRegions || [],
       tags: tagsWithCount || [],
       pagination: {
         totalTags,
