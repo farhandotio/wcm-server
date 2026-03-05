@@ -272,6 +272,7 @@ export const deleteUserAccount = async (req, res) => {
   }
 };
 
+// ৯. Public Profile View
 export const getPublicProfile = async (req, res) => {
   try {
     const user = await User.findById(req.params.id)
@@ -297,7 +298,7 @@ export const getPublicProfile = async (req, res) => {
   }
 };
 
-// ৯. Get Famous Creators (Public) with Pagination, Sorting & Filtering
+// ১০. Famous Creators List with Advanced Filtering, Sorting, and Pagination
 export const getFamousCreators = async (req, res) => {
   try {
     const { 
@@ -321,7 +322,7 @@ export const getFamousCreators = async (req, res) => {
       userQuery.$or = [
         { firstName: { $regex: search, $options: 'i' } },
         { lastName: { $regex: search, $options: 'i' } },
-        { username: { $regex: search, $options: 'i' } }
+        { username: { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -335,11 +336,11 @@ export const getFamousCreators = async (req, res) => {
 
       {
         $lookup: {
-          from: 'listings', 
+          from: 'listings',
           localField: '_id',
           foreignField: 'creatorId',
-          as: 'allListings'
-        }
+          as: 'allListings',
+        },
       },
 
       {
@@ -354,9 +355,9 @@ export const getFamousCreators = async (req, res) => {
               $filter: {
                 input: '$allListings',
                 as: 'l',
-                cond: { $eq: ['$$l.status', 'approved'] }
-              }
-            }
+                cond: { $eq: ['$$l.status', 'approved'] },
+              },
+            },
           },
 
           totalViews: {
@@ -398,7 +399,7 @@ export const getFamousCreators = async (req, res) => {
 
     const [creators, totalCountData] = await Promise.all([
       User.aggregate(aggregatePipeline),
-      User.aggregate([...countPipeline, { $count: 'total' }])
+      User.aggregate([...countPipeline, { $count: 'total' }]),
     ]);
 
     const totalCreators = totalCountData[0]?.total || 0;

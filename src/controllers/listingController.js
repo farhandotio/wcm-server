@@ -136,7 +136,6 @@ export const createListing = async (req, res) => {
 export const updateListing = async (req, res) => {
   try {
     const { id } = req.params;
-
     const listing = await Listing.findById(id);
 
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
@@ -147,43 +146,37 @@ export const updateListing = async (req, res) => {
 
     const updateData = { ...req.body };
 
-    if (listing.status !== 'approved') {
-      listing.status = 'pending';
-      listing.rejectionReason = '';
-    }
-
-    if (updateData.externalUrls) {
-      listing.externalUrls = Array.isArray(updateData.externalUrls)
-        ? updateData.externalUrls
-        : updateData.externalUrls
-            .split(',')
-            .map((url) => url.trim())
-            .filter((url) => url !== '');
-    }
-
+    // 🔹 Tag Restriction (Max 5)
+    let tags = [];
     if (updateData.culturalTags) {
-      listing.culturalTags = Array.isArray(updateData.culturalTags)
+      tags = Array.isArray(updateData.culturalTags)
         ? updateData.culturalTags
         : updateData.culturalTags
             .split(',')
             .map((t) => t.trim())
             .filter((t) => t !== '');
+
+      if (tags.length > 5) {
+        return res.status(400).json({ message: 'Maximum 5 cultural tags allowed' });
+      }
+      listing.culturalTags = tags;
     }
 
+    if (listing.status !== 'approved') {
+      listing.status = 'pending';
+      listing.rejectionReason = '';
+    }
+
+    // 🔹 Image Update
     if (req.file) {
       if (listing.image && !listing.image.startsWith('http')) {
         const oldImagePath = path.join(process.cwd(), listing.image);
-        if (fs.existsSync(oldImagePath)) {
-          try {
-            fs.unlinkSync(oldImagePath);
-          } catch (err) {
-            console.error('Old image delete error:', err);
-          }
-        }
+        if (fs.existsSync(oldImagePath)) fs.unlinkSync(oldImagePath);
       }
       listing.image = req.file.path;
     }
 
+    // 🔹 Field Updates
     const fieldsToUpdate = [
       'title',
       'description',
@@ -194,31 +187,25 @@ export const updateListing = async (req, res) => {
       'category',
     ];
     fieldsToUpdate.forEach((field) => {
-      if (updateData[field] !== undefined) {
-        listing[field] = updateData[field];
-      }
+      if (updateData[field] !== undefined) listing[field] = updateData[field];
     });
 
     await listing.save();
-
     const finalListing = await Listing.findById(id).populate('category culturalTags');
 
     res.status(200).json({
-      message:
-        listing.status === 'approved'
-          ? 'Listing updated successfully'
-          : 'Listing updated and submitted for re-review',
+      message: listing.status === 'approved' ? 'Update successful' : 'Submitted for re-review',
       updatedListing: finalListing,
     });
   } catch (error) {
-    console.error('Update Error:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
 export const getPublicListings = async (req, res) => {
   try {
-    const { filter, search, category, region, tradition, creatorId, limit, page } = req.query;
+    const { filter, search, category, region, tradition, creatorId, limit, page, offset } =
+      req.query;
 
     let query = { status: 'approved' };
 
@@ -265,8 +252,8 @@ export const getPublicListings = async (req, res) => {
     }
 
     const resPerPage = parseInt(limit) || 10;
-    const currentPage = parseInt(page) || 1;
-    const skip = resPerPage * (currentPage - 1);
+
+    const skip = offset ? parseInt(offset) : resPerPage * (parseInt(page || 1) - 1);
 
     let listings = await Listing.find(query)
       .populate('creatorId', 'username profile')
@@ -300,7 +287,9 @@ export const getPublicListings = async (req, res) => {
       success: true,
       total: totalListings,
       count: formattedListings.length,
-      currentPage,
+      currentPage: parseInt(page) || 1,
+      nextOffset: skip + formattedListings.length,
+      hasMore: skip + formattedListings.length < totalListings,
       listings: formattedListings,
     });
   } catch (error) {

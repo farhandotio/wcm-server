@@ -103,3 +103,85 @@ export const getMyTransactions = async (req, res) => {
     });
   }
 };
+
+export const getPromotionAnalytics = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const listing = await Listing.findOne({ _id: id, creatorId: userId })
+      .select('title promotion views isPromoted image')
+      .lean();
+
+    if (!listing) {
+      return res.status(404).json({
+        success: false,
+        message: 'Node not found or unauthorized.',
+      });
+    }
+
+    const promotion = listing.promotion || { ppc: {}, boost: {}, level: 0 };
+    const ppc = promotion.ppc || {};
+    const boost = promotion.boost || {};
+
+    const totalPurchasedClicks = Number(ppc.totalClicks) || 0;
+    const costPerClick = Number(ppc.costPerClick) || 0;
+    const currentBalance = Number(ppc.ppcBalance) || 0;
+
+    // Fixed Calculation Logic
+    const initialTotalBudget = totalPurchasedClicks * costPerClick;
+    const clicksRemaining =
+      costPerClick > 0 ? Math.max(0, Math.floor(currentBalance / costPerClick)) : 0;
+    const clicksUsed =
+      costPerClick > 0
+        ? Math.max(0, Math.floor((initialTotalBudget - currentBalance) / costPerClick))
+        : 0;
+
+    const consumptionRate =
+      totalPurchasedClicks > 0 ? Number(((clicksUsed / totalPurchasedClicks) * 100).toFixed(1)) : 0;
+
+    let daysRemaining = 0;
+    let boostProgress = 0;
+
+    if (boost.isActive && boost.expiresAt) {
+      const now = new Date();
+      const expiry = new Date(boost.expiresAt);
+      const diffTime = expiry - now;
+      daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+      boostProgress = Number(Math.min(100, Math.max(0, (daysRemaining / 30) * 100)).toFixed(1));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        title: listing.title,
+        image: listing.image,
+        isPromoted: !!listing.isPromoted,
+        level: promotion.level || 0,
+        views: listing.views || 0,
+        ppc: {
+          isActive: !!(ppc.isActive && currentBalance >= costPerClick),
+          balance: currentBalance.toFixed(2),
+          costPerClick: costPerClick.toFixed(2),
+          totalPurchasedClicks,
+          clicksUsed,
+          clicksRemaining,
+          consumptionRate,
+        },
+        boost: {
+          isActive: !!(boost.isActive && daysRemaining > 0),
+          expiresAt: boost.expiresAt,
+          daysRemaining,
+          amountPaid: boost.amountPaid || 0,
+          boostProgress,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Analytics Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error loading insights',
+    });
+  }
+};
