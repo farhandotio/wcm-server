@@ -210,18 +210,16 @@ export const updateListing = async (req, res) => {
 
 export const getPublicListings = async (req, res) => {
   try {
-    const { filter, search, category, region, tradition, creatorId, limit, page, offset } =
-      req.query;
+    const { filter, search, category, region, tradition, creatorId, limit, page, offset } = req.query;
 
     let query = { status: 'approved' };
 
+    // Filter Logic
     if (category && category !== 'All' && category !== 'undefined') {
       if (mongoose.Types.ObjectId.isValid(category)) {
         query.category = category;
       } else {
-        const foundCategory = await Category.findOne({
-          title: { $regex: category, $options: 'i' },
-        });
+        const foundCategory = await Category.findOne({ title: { $regex: category, $options: 'i' } });
         if (foundCategory) {
           query.category = foundCategory._id;
         } else {
@@ -235,14 +233,13 @@ export const getPublicListings = async (req, res) => {
       query.tradition = { $regex: tradition, $options: 'i' };
     }
 
-    const now = new Date();
     if (filter === 'Today') {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
       query.createdAt = { $gte: startOfDay };
     } else if (filter === 'This week') {
       const startOfWeek = new Date();
-      startOfWeek.setDate(now.getDate() - 7);
+      startOfWeek.setDate(startOfWeek.getDate() - 7);
       startOfWeek.setHours(0, 0, 0, 0);
       query.createdAt = { $gte: startOfWeek };
     }
@@ -251,12 +248,8 @@ export const getPublicListings = async (req, res) => {
 
     if (search) {
       const [matchingTags, matchingCategories] = await Promise.all([
-        Tag.find({ title: { $regex: search, $options: 'i' } })
-          .select('_id')
-          .lean(),
-        Category.find({ title: { $regex: search, $options: 'i' } })
-          .select('_id')
-          .lean(),
+        Tag.find({ title: { $regex: search, $options: 'i' } }).select('_id').lean(),
+        Category.find({ title: { $regex: search, $options: 'i' } }).select('_id').lean(),
       ]);
 
       const tagIds = matchingTags.map((t) => t._id);
@@ -273,22 +266,28 @@ export const getPublicListings = async (req, res) => {
     }
 
     const resPerPage = parseInt(limit) || 10;
-
     const skip = offset ? parseInt(offset) : resPerPage * (parseInt(page || 1) - 1);
 
+    // ১. লিস্টিং ফেচ করা
     let listings = await Listing.find(query)
       .populate('creatorId', 'username profile')
       .populate('category', 'title')
       .populate('culturalTags', 'title image')
-      .sort({
-        isPromoted: -1,
-        'promotion.level': -1,
-        views: -1,
-        createdAt: -1,
-      })
+      .sort({ isPromoted: -1, 'promotion.level': -1, views: -1, createdAt: -1 })
       .limit(resPerPage)
       .skip(skip)
       .lean();
+
+    // ২. প্রতিটি ক্রিয়েটরের জন্য লিস্টিং কাউন্ট বের করা 
+    listings = await Promise.all(
+      listings.map(async (item) => {
+        if (item.creatorId) {
+          const count = await Listing.countDocuments({ creatorId: item.creatorId._id });
+          item.creatorId.listingsCount = count;
+        }
+        return item;
+      })
+    );
 
     const totalListings = await Listing.countDocuments(query);
     const currentUserId = req.user ? req.user._id.toString() : null;
@@ -297,9 +296,7 @@ export const getPublicListings = async (req, res) => {
       const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
       return {
         ...item,
-        isFavorited: currentUserId
-          ? safeFavorites.some((favId) => favId.toString() === currentUserId)
-          : false,
+        isFavorited: currentUserId ? safeFavorites.some((favId) => favId.toString() === currentUserId) : false,
         favoritesCount: safeFavorites.length,
       };
     });
@@ -315,11 +312,7 @@ export const getPublicListings = async (req, res) => {
     });
   } catch (error) {
     console.error('Public Listings Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server Error',
-      details: error.message,
-    });
+    res.status(500).json({ success: false, message: 'Server Error', details: error.message });
   }
 };
 
@@ -331,7 +324,6 @@ export const handlePpcClick = async (req, res) => {
     const cacheKey = `ppc_${userIP}_${listingId}`;
     const now = Date.now();
 
-    // ১. ১ মিনিটের কুলডাউন চেক
     if (clickCooldowns.has(cacheKey)) {
       const lastClick = clickCooldowns.get(cacheKey);
       if (now - lastClick < 60000) {
@@ -342,7 +334,6 @@ export const handlePpcClick = async (req, res) => {
       }
     }
 
-    // ২. রিকোয়েস্ট পাওয়ার সাথে সাথেই কুলডাউন সেট করে দিন (Locking early)
     clickCooldowns.set(cacheKey, now);
 
     const listing = await Listing.findById(listingId);
@@ -361,7 +352,6 @@ export const handlePpcClick = async (req, res) => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // ৩. এটমিক আপডেট
       await Promise.all([
         Listing.findByIdAndUpdate(listingId, {
           $set: {
@@ -381,7 +371,6 @@ export const handlePpcClick = async (req, res) => {
       wasCharged = true;
     }
 
-    // ক্লিনআপ কুলডাউন ৫ মিনিট পর
     setTimeout(() => clickCooldowns.delete(cacheKey), 300000);
 
     res.status(200).json({
@@ -420,7 +409,6 @@ export const getListingById = async (req, res) => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // সরাসরি এটমিক আপডেট (কোনো ডাবল কাউন্ট হবে না)
       await Promise.all([
         Listing.findByIdAndUpdate(id, { $inc: { views: 1 } }),
         Analytics.findOneAndUpdate(
