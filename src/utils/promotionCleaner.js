@@ -6,71 +6,52 @@ const startPromotionCleaner = () => {
     try {
       const now = new Date();
 
+      // মেয়াদ উত্তীর্ণ বুস্ট অফ করা
       await Listing.updateMany(
-        {
-          'promotion.boost.isActive': true,
-          'promotion.boost.expiresAt': { $lt: now },
-        },
+        { 'promotion.boost.isActive': true, 'promotion.boost.expiresAt': { $lt: now } },
         { $set: { 'promotion.boost.isActive': false } }
       );
 
+      // ব্যালেন্স শেষ হওয়া পিপিছি অফ করা
       await Listing.updateMany(
-        {
-          'promotion.ppc.isActive': true,
-          'promotion.ppc.ppcBalance': { $lte: 0 },
-        },
+        { 'promotion.ppc.isActive': true, 'promotion.ppc.ppcBalance': { $lte: 0 } },
         { $set: { 'promotion.ppc.isActive': false } }
       );
 
-      const deactivatedResult = await Listing.updateMany(
-        {
-          isPromoted: true,
-          'promotion.boost.isActive': false,
-          'promotion.ppc.isActive': false,
-        },
-        {
-          $set: {
-            isPromoted: false,
-            'promotion.level': 0,
-          },
-        }
+      // সব অফ হলে রিসেট
+      await Listing.updateMany(
+        { isPromoted: true, 'promotion.boost.isActive': false, 'promotion.ppc.isActive': false },
+        { $set: { isPromoted: false, 'promotion.level': 0 } }
       );
 
-      const activePromotions = await Listing.find({ isPromoted: true });
+      // একটিভ গুলোর লেভেল রি-ক্যালকুলেশন (শুধুমাত্র পেমেন্ট ডাটা দিয়ে)
+      const activeListings = await Listing.find({ isPromoted: true });
+      if (activeListings.length > 0) {
+        const bulkOps = activeListings.map((listing) => {
+          let level = 0;
 
-      if (activePromotions.length > 0) {
-        const bulkOps = activePromotions.map((listing) => {
-          const boostAmt = listing.promotion.boost.isActive
-            ? listing.promotion.boost.amountPaid || 0
-            : 0;
-          const ppcAmt = listing.promotion.ppc.isActive ? listing.promotion.ppc.amountPaid || 0 : 0;
-          const viewsCount = listing.views || 0;
-          const favCount = listing.favorites?.length || 0;
+          if (listing.promotion.boost.isActive) {
+            // ১ দিনের বুস্ট ১০ ইউরো দিয়ে করলে লেভেল ২০ হবে
+            level += (listing.promotion.boost.amountPaid / 7) * 2; // ডিফল্ট ৭ দিন ধরলে
+          }
 
-          const newLevel = Math.floor(
-            boostAmt * 1.5 + ppcAmt * 1.2 + viewsCount * 0.1 + favCount * 2
-          );
+          if (listing.promotion.ppc.isActive) {
+            // হাই সিপিসি মানে হাই লেভেল
+            level +=
+              listing.promotion.ppc.costPerClick * 10 + listing.promotion.ppc.ppcBalance / 10;
+          }
 
           return {
             updateOne: {
               filter: { _id: listing._id },
-              update: { $set: { 'promotion.level': newLevel } },
+              update: { $set: { 'promotion.level': Math.floor(level) } },
             },
           };
         });
-
-        if (bulkOps.length > 0) {
-          await Listing.bulkWrite(bulkOps);
-        }
-      }
-
-      if (deactivatedResult.modifiedCount > 0) {
-        console.log(
-          `[Cron] Sync: ${deactivatedResult.modifiedCount} listings reset to standard status.`
-        );
+        await Listing.bulkWrite(bulkOps);
       }
     } catch (error) {
-      console.error('❌ Promotion Protocol Error:', error);
+      console.error('Cron Cleaner Error:', error);
     }
   });
 };

@@ -113,6 +113,97 @@ export const createCheckoutSession = async (req, res) => {
 };
 
 // --- Webhook Handler (The Core Logic) ---
+// export const handleStripeWebhook = async (req, res) => {
+//   const sig = req.headers['stripe-signature'];
+//   let event;
+
+//   try {
+//     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+//   } catch (err) {
+//     return res.status(400).send(`Webhook Error: ${err.message}`);
+//   }
+
+//   if (event.type === 'checkout.session.completed') {
+//     const session = event.data.object;
+//     const { listingId, packageType, creatorId, days, totalClicks, originalCpc } = session.metadata;
+
+//     const dbSession = await mongoose.startSession();
+//     dbSession.startTransaction();
+
+//     try {
+//       const amountPaid = session.amount_total / 100;
+//       const paymentCurrency = session.currency.toUpperCase();
+//       const targetCurrency = process.env.INTERNAL_CURRENCY || 'EUR';
+
+//       // ১. রিয়েল-টাইম এক্সচেঞ্জ রেট আনা
+//       const fxRate = await getExchangeRate(paymentCurrency, targetCurrency);
+//       const amountInEUR = Number((amountPaid * fxRate).toFixed(2));
+
+//       // ২. ভ্যাট ক্যালকুলেশন (শুধুমাত্র হিসাবের জন্য, টোটাল অ্যামাউন্ট থেকে আলাদা করা)
+//       const vatRate = parseFloat(process.env.DEFAULT_VAT_RATE) || 19;
+//       const vatAmountInEUR = Number((amountInEUR - amountInEUR / (1 + vatRate / 100)).toFixed(2));
+
+//       // ৩. ট্রানজেকশন রেকর্ড
+//       await Transaction.create(
+//         [
+//           {
+//             creator: creatorId,
+//             listing: listingId,
+//             stripeSessionId: session.id,
+//             amountPaid,
+//             currency: session.currency,
+//             fxRate,
+//             amountInEUR,
+//             packageType,
+//             status: 'completed',
+//             invoiceNumber: `INV-${Date.now()}`,
+//             vatAmount: vatAmountInEUR,
+//           },
+//         ],
+//         { session: dbSession }
+//       );
+
+//       // ৪. লিস্টিং আপডেট
+//       const listing = await Listing.findById(listingId).session(dbSession);
+//       if (!listing) throw new Error('Listing not found');
+
+//       if (packageType === 'boost') {
+//         listing.promotion.boost.isActive = true;
+//         listing.promotion.boost.amountPaid = amountInEUR;
+//         const expiry = new Date();
+//         expiry.setDate(expiry.getDate() + parseInt(days));
+//         listing.promotion.boost.expiresAt = expiry;
+//       } else if (packageType === 'ppc') {
+//         listing.promotion.ppc.isActive = true;
+//         listing.promotion.ppc.ppcBalance = Number(
+//           ((listing.promotion.ppc.ppcBalance || 0) + amountInEUR).toFixed(2)
+//         );
+//         listing.promotion.ppc.amountPaid = Number(
+//           ((listing.promotion.ppc.amountPaid || 0) + amountInEUR).toFixed(2)
+//         );
+//         listing.promotion.ppc.totalClicks =
+//           (listing.promotion.ppc.totalClicks || 0) + parseInt(totalClicks);
+
+//         // CPC-কেও EUR-তে কনভার্ট করা হলো
+//         const cpcInEUR = Number((Number(originalCpc) * fxRate).toFixed(4));
+//         listing.promotion.ppc.costPerClick = cpcInEUR;
+//       }
+
+//       applyPromotionLogic(listing);
+//       await listing.save({ session: dbSession });
+
+//       await dbSession.commitTransaction();
+//       console.log(`Success: Converted ${amountPaid} ${paymentCurrency} to ${amountInEUR} EUR`);
+//     } catch (error) {
+//       await dbSession.abortTransaction();
+//       console.error('Webhook Error:', error);
+//     } finally {
+//       dbSession.endSession();
+//     }
+//   }
+//   res.json({ received: true });
+// };
+
 export const handleStripeWebhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
@@ -133,17 +224,16 @@ export const handleStripeWebhook = async (req, res) => {
     try {
       const amountPaid = session.amount_total / 100;
       const paymentCurrency = session.currency.toUpperCase();
-      const targetCurrency = process.env.INTERNAL_CURRENCY || 'EUR';
+      const targetCurrency = 'EUR';
 
-      // ১. রিয়েল-টাইম এক্সচেঞ্জ রেট আনা
+      // ১. কারেন্সি কনভার্সন
       const fxRate = await getExchangeRate(paymentCurrency, targetCurrency);
       const amountInEUR = Number((amountPaid * fxRate).toFixed(2));
 
-      // ২. ভ্যাট ক্যালকুলেশন (শুধুমাত্র হিসাবের জন্য, টোটাল অ্যামাউন্ট থেকে আলাদা করা)
-      const vatRate = parseFloat(process.env.DEFAULT_VAT_RATE) || 19;
+      // ২. ট্রানজেকশন রেকর্ড (ভ্যাট সহ)
+      const vatRate = 19;
       const vatAmountInEUR = Number((amountInEUR - amountInEUR / (1 + vatRate / 100)).toFixed(2));
 
-      // ৩. ট্রানজেকশন রেকর্ড
       await Transaction.create(
         [
           {
@@ -163,7 +253,7 @@ export const handleStripeWebhook = async (req, res) => {
         { session: dbSession }
       );
 
-      // ৪. লিস্টিং আপডেট
+      // ৩. লিস্টিং আপডেট ও লেভেল ক্যালকুলেশন
       const listing = await Listing.findById(listingId).session(dbSession);
       if (!listing) throw new Error('Listing not found');
 
@@ -184,16 +274,30 @@ export const handleStripeWebhook = async (req, res) => {
         listing.promotion.ppc.totalClicks =
           (listing.promotion.ppc.totalClicks || 0) + parseInt(totalClicks);
 
-        // CPC-কেও EUR-তে কনভার্ট করা হলো
+        // CPC EUR-তে কনভার্ট করা হলো
         const cpcInEUR = Number((Number(originalCpc) * fxRate).toFixed(4));
         listing.promotion.ppc.costPerClick = cpcInEUR;
       }
 
-      applyPromotionLogic(listing);
-      await listing.save({ session: dbSession });
+      // ৪. নতুন র‍্যাঙ্কিং অ্যালগরিদম (Views/Favs বাদ দেওয়া হয়েছে)
+      // Boost Intensity = (টাকা / দিন) * ২
+      const boostIntensity = listing.promotion.boost.isActive
+        ? (listing.promotion.boost.amountPaid / parseInt(days || 1)) * 2
+        : 0;
 
+      // PPC Priority = (CPC * ১০) + (টোটাল বাজেট / ১০)
+      const ppcPriority = listing.promotion.ppc.isActive
+        ? listing.promotion.ppc.costPerClick * 10 + listing.promotion.ppc.ppcBalance / 10
+        : 0;
+
+      // ফাইনাল লেভেল সেট (সাথে সাথে রিফ্রেশ)
+      listing.promotion.level = Math.floor(boostIntensity + ppcPriority);
+      listing.isPromoted = true;
+
+      await listing.save({ session: dbSession });
       await dbSession.commitTransaction();
-      console.log(`Success: Converted ${amountPaid} ${paymentCurrency} to ${amountInEUR} EUR`);
+
+      console.log(`[Webhook] Success. New Level: ${listing.promotion.level}`);
     } catch (error) {
       await dbSession.abortTransaction();
       console.error('Webhook Error:', error);
