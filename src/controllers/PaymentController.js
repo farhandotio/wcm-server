@@ -72,7 +72,6 @@ export const createCheckoutSession = async (req, res) => {
     const listing = await Listing.findById(listingId);
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    // CPC ক্যালকুলেশন (পেমেন্ট কারেন্সিতে)
     const paymentCurrency = currency || 'eur';
     const calculatedCPC =
       packageType === 'ppc' ? (Number(amount) / Number(totalClicks)).toFixed(4) : 0;
@@ -101,7 +100,7 @@ export const createCheckoutSession = async (req, res) => {
         packageType,
         days: days ? days.toString() : '0',
         totalClicks: totalClicks ? totalClicks.toString() : '0',
-        originalCpc: calculatedCPC.toString(), // পেমেন্ট কারেন্সিতে CPC
+        originalCpc: calculatedCPC.toString(),
         creatorId: req.user._id.toString(),
       },
     });

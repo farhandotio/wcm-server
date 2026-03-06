@@ -66,7 +66,7 @@ const startPromotionCleaner = () => {
 
       if (deactivatedResult.modifiedCount > 0) {
         console.log(
-          `[Cron] Sync: ${deactivatedResult.modifiedCount} listings returned to standard status.`
+          `[Cron] Sync: ${deactivatedResult.modifiedCount} listings reset to standard status.`
         );
       }
     } catch (error) {
