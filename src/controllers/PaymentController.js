@@ -30,7 +30,6 @@ const getExchangeRate = async (fromCurrency, toCurrency) => {
   }
 };
 
-
 // --- Create Checkout Session ---
 export const createCheckoutSession = async (req, res) => {
   try {
@@ -39,10 +38,32 @@ export const createCheckoutSession = async (req, res) => {
     const listing = await Listing.findById(listingId);
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    const paymentCurrency = currency || 'eur';
-    const calculatedCPC =
-      packageType === 'ppc' ? (Number(amount) / Number(totalClicks)).toFixed(4) : 0;
+    const now = new Date();
 
+    // --- প্রি-পেমেন্ট ভ্যালিডেশন (ডুপ্লিকেট প্রোমোশন চেক) ---
+    if (packageType === 'boost') {
+      // যদি অলরেডি একটিভ বুস্ট থাকে যার মেয়াদ শেষ হয়নি
+      if (listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now) {
+        return res.status(400).json({
+          message: 'You already have an active Viral Boost for this listing.',
+        });
+      }
+    } else if (packageType === 'ppc') {
+      // যদি পিপিছি ব্যালেন্স এখনো থাকে
+      if (listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0) {
+        return res.status(400).json({
+          message: 'You already have an active PPC balance. Please wait for it to finish.',
+        });
+      }
+    }
+
+    const paymentCurrency = currency || 'eur';
+
+    // CPC ক্যালকুলেশন (এটি মেটাডাটায় যাবে)
+    const calculatedCPC =
+      packageType === 'ppc' ? (Number(amount) / Number(totalClicks)).toFixed(4) : '0';
+
+    // স্ট্রাইপ সেশন তৈরি
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [
@@ -52,7 +73,9 @@ export const createCheckoutSession = async (req, res) => {
             product_data: {
               name: `${packageType.toUpperCase()} Promotion: ${listing.title}`,
               description:
-                packageType === 'boost' ? `${days} Days Boost` : `${totalClicks} Clicks Credit`,
+                packageType === 'boost'
+                  ? `${days} Days Viral Boost`
+                  : `${totalClicks} Clicks Credit`,
             },
             unit_amount: Math.round(Number(amount) * 100),
           },
@@ -67,7 +90,7 @@ export const createCheckoutSession = async (req, res) => {
         packageType,
         days: days ? days.toString() : '0',
         totalClicks: totalClicks ? totalClicks.toString() : '0',
-        originalCpc: calculatedCPC.toString(),
+        originalCpc: calculatedCPC,
         creatorId: req.user._id.toString(),
       },
     });
@@ -75,54 +98,45 @@ export const createCheckoutSession = async (req, res) => {
     res.status(200).json({ url: session.url });
   } catch (error) {
     console.error('Stripe Session Error:', error);
-    res.status(500).json({ message: 'Payment failed' });
+    res.status(500).json({ message: 'Could not initiate payment. Please try again.' });
   }
 };
 
-// --- Ranking & Promotion Logic ---
 const applyPromotionLogic = (listing, daysInput = null) => {
   let boostScore = 0;
   let ppcScore = 0;
   const now = new Date();
 
   // ১. Boost Intensity (টাকা / দিন)
-  // যত কম দিনে যত বেশি টাকা, লেভেল তত হাই হবে।
   if (listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now) {
     const amount = listing.promotion.boost.amountPaid || 0;
     const expiry = new Date(listing.promotion.boost.expiresAt);
 
-    // দিন বের করা (যদি নতুন পেমেন্ট হয় তবে ইনপুট দিন ব্যবহার করবে, নাহলে বাকি দিন)
     let daysDiff = daysInput;
     if (!daysDiff) {
       const diffTime = Math.abs(expiry - now);
       daysDiff = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
     }
 
-    // লজিক: (টোটাল টাকা / দিন) * মাল্টিপ্লায়ার
     boostScore = (amount / daysDiff) * 10;
   }
 
   // ২. PPC Priority (High CPC = High Level)
-  // এখানে CPC-কে ৩০০ গুণ গুরুত্ব দেওয়া হয়েছে যাতে বাজেটের চেয়ে CPC-র প্রভাব বেশি থাকে।
   if (listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0) {
     const cpc = listing.promotion.ppc.costPerClick || 0.1;
     const balance = listing.promotion.ppc.ppcBalance || 0;
 
-    // লজিক: (প্রতি ক্লিকের দাম * ৩০০) + (বাজেটের ৫%)
-    // এর ফলে কেউ ১০ ইউরো দিয়ে ৫ ইউরো সিপিসি দিলে সে ১০০ ইউরো দিয়ে ০.১ সিপিসি দেওয়া ইউজারের চেয়ে উপরে থাকবে।
+    // CPC কে ৩০০ গুণ গুরুত্ব দেওয়া হয়েছে
     ppcScore = cpc * 300 + balance * 0.05;
   }
 
-  // ৩. ফাইনাল আপডেট
+  // ৩. আপডেট
   listing.promotion.level = Math.floor(boostScore + ppcScore);
+  listing.isPromoted = !!(
+    (listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0) ||
+    (listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now)
+  );
 
-  const hasActivePpc = listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0;
-  const hasActiveBoost =
-    listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now;
-
-  listing.isPromoted = !!(hasActivePpc || hasActiveBoost);
-
-  // যদি কোনো প্রোমোশন একটিভ না থাকে তবে লেভেল ০
   if (!listing.isPromoted) listing.promotion.level = 0;
 
   return listing;
@@ -146,6 +160,23 @@ export const handleStripeWebhook = async (req, res) => {
     dbSession.startTransaction();
 
     try {
+      const listing = await Listing.findById(listingId).session(dbSession);
+      if (!listing) throw new Error('Listing not found');
+
+      const now = new Date();
+
+      // --- ডুপ্লিকেট প্রমোশন চেক ---
+      if (packageType === 'boost') {
+        if (listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now) {
+          throw new Error('Listing already has an active boost.');
+        }
+      } else if (packageType === 'ppc') {
+        if (listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0) {
+          throw new Error('Listing already has an active PPC campaign.');
+        }
+      }
+
+      // --- পেমেন্ট ডাটা প্রসেসিং ---
       const amountPaid = session.amount_total / 100;
       const paymentCurrency = session.currency.toUpperCase();
       const targetCurrency = 'EUR';
@@ -156,7 +187,7 @@ export const handleStripeWebhook = async (req, res) => {
       const vatRate = 19;
       const vatAmountInEUR = Number((amountInEUR - amountInEUR / (1 + vatRate / 100)).toFixed(2));
 
-      // ট্রানজেকশন তৈরি
+      // ট্রানজেকশন রেকর্ড
       await Transaction.create(
         [
           {
@@ -176,10 +207,7 @@ export const handleStripeWebhook = async (req, res) => {
         { session: dbSession }
       );
 
-      const listing = await Listing.findById(listingId).session(dbSession);
-      if (!listing) throw new Error('Listing not found');
-
-      // পেমেন্ট ডাটা আপডেট
+      // --- ডাটা আপডেট ---
       if (packageType === 'boost') {
         listing.promotion.boost.isActive = true;
         listing.promotion.boost.amountPaid = amountInEUR;
@@ -188,29 +216,26 @@ export const handleStripeWebhook = async (req, res) => {
         listing.promotion.boost.expiresAt = expiry;
       } else if (packageType === 'ppc') {
         listing.promotion.ppc.isActive = true;
-        listing.promotion.ppc.ppcBalance = Number(
-          ((listing.promotion.ppc.ppcBalance || 0) + amountInEUR).toFixed(2)
-        );
-        listing.promotion.ppc.amountPaid = Number(
-          ((listing.promotion.ppc.amountPaid || 0) + amountInEUR).toFixed(2)
-        );
-        listing.promotion.ppc.totalClicks =
-          (listing.promotion.ppc.totalClicks || 0) + parseInt(totalClicks);
+        listing.promotion.ppc.ppcBalance = amountInEUR;
+        listing.promotion.ppc.amountPaid = amountInEUR;
+        listing.promotion.ppc.totalClicks = parseInt(totalClicks);
+        listing.promotion.ppc.executedClicks = 0; // রিসেট
 
         const cpcInEUR = Number((Number(originalCpc) * fxRate).toFixed(4));
         listing.promotion.ppc.costPerClick = cpcInEUR;
       }
 
-      // র‍্যাঙ্কিং লজিক কল করা (days পাস করা হয়েছে সঠিক ক্যালকুলেশনের জন্য)
+      // র‍্যাঙ্কিং লজিক কল (পাসিং days ইনপুট)
       applyPromotionLogic(listing, parseInt(days) || null);
 
       await listing.save({ session: dbSession });
       await dbSession.commitTransaction();
 
-      console.log(`[Webhook] Success. New Level: ${listing.promotion.level}`);
+      console.log(`[Webhook] Success. Listing: ${listingId}, Level: ${listing.promotion.level}`);
     } catch (error) {
       await dbSession.abortTransaction();
-      console.error('Webhook Error:', error);
+      console.error('❌ Webhook Logic Error:', error.message);
+      // এখানে আপনি চাইলে ইউজারকে রিফান্ড বা এরর লগ দিতে পারেন
     } finally {
       dbSession.endSession();
     }
