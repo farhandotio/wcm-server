@@ -7,7 +7,6 @@ export const createInvoice = (transaction, listing) => {
   const fileName = `invoice-${transaction.invoiceNumber}.pdf`;
   const filePath = path.join('uploads/invoices', fileName);
 
-  // ফোল্ডার না থাকলে তৈরি করবে
   if (!fs.existsSync('uploads/invoices')) {
     fs.mkdirSync('uploads/invoices', { recursive: true });
   }
@@ -15,7 +14,6 @@ export const createInvoice = (transaction, listing) => {
   const stream = fs.createWriteStream(filePath);
   doc.pipe(stream);
 
-  // --- ইনভয়েস ডিজাইন ---
   doc.fontSize(20).text(process.env.BUSINESS_NAME, { align: 'right' });
   doc.fontSize(10).text(process.env.BUSINESS_ADDRESS, { align: 'right' });
   doc.text(`VAT: ${process.env.BUSINESS_VAT_NUMBER}`, { align: 'right' });

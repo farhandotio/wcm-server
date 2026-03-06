@@ -14,34 +14,43 @@ export const getCreatorDashboardStats = async (req, res) => {
     ]);
 
     const totalSpent = transactions
-      .reduce((acc, curr) => acc + (Number(curr.amountPaid) || 0), 0)
+      .reduce((acc, curr) => acc + (Number(curr.amountInEUR) || 0), 0) 
       .toFixed(2);
 
     const totalViews = listings.reduce((acc, curr) => acc + (curr.views || 0), 0);
-    const totalPaidClicks = listings.reduce(
+
+    const totalExecutedClicks = listings.reduce(
+      (acc, curr) => acc + (curr.promotion?.ppc?.executedClicks || 0),
+      0
+    );
+
+    const totalPurchasedClicks = listings.reduce(
       (acc, curr) => acc + (curr.promotion?.ppc?.totalClicks || 0),
       0
     );
+
     const totalFavorites = listings.reduce((acc, curr) => acc + (curr.favorites?.length || 0), 0);
 
     const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     sevenDaysAgo.setHours(0, 0, 0, 0);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
 
     const analyticsData = await Analytics.find({
       creatorId,
       date: { $gte: sevenDaysAgo },
-    });
+    }).lean();
 
     const chartData = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      d.setHours(0, 0, 0, 0);
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(sevenDaysAgo);
+      d.setDate(d.getDate() + i);
+      const dateString = d.toISOString().split('T')[0];
 
       const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
 
-      const dayRecord = analyticsData.find((a) => new Date(a.date).getTime() === d.getTime());
+      const dayRecord = analyticsData.find(
+        (a) => new Date(a.date).toISOString().split('T')[0] === dateString
+      );
 
       chartData.push({
         name: dayName,
@@ -53,7 +62,8 @@ export const getCreatorDashboardStats = async (req, res) => {
     const stats = {
       totalListings: listings.length,
       totalViews,
-      totalPaidClicks,
+      totalExecutedClicks, 
+      totalPurchasedClicks, 
       totalFavorites,
       activePromotions: listings.filter((l) => l.isPromoted).length,
 
@@ -120,36 +130,36 @@ export const getPromotionAnalytics = async (req, res) => {
     const ppc = listing.promotion?.ppc || {};
     const boost = listing.promotion?.boost || {};
 
-    // --- PPC Calculation Logic ---
+    // --- PPC Calculation Logic (New & Precise) ---
     const costPerClick = Number(ppc.costPerClick) || 0.1;
     const currentBalance = Number(ppc.ppcBalance) || 0;
-    const clicksUsed = Number(ppc.totalClicks) || 0;
 
-    // ১. মোট কত টাকার পিপিছি কেনা হয়েছিল (amountPaid) সেটা থেকে মোট ক্লিক সংখ্যা বের করা
-    const amountPaid = Number(ppc.amountPaid) || 0;
-    let totalPurchasedClicks = amountPaid > 0 ? Math.floor(amountPaid / costPerClick) : 0;
+    const totalPurchasedClicks = Number(ppc.totalClicks) || 0;
+    const clicksUsed = Number(ppc.executedClicks) || 0;
 
-    // সেফটি চেক: যদি কোনো কারণে totalPurchasedClicks খরচ করা ক্লিকের চেয়ে কম দেখায় (পুরানো ডাটা হলে)
-    if (totalPurchasedClicks < clicksUsed) {
-      totalPurchasedClicks = clicksUsed + Math.floor(currentBalance / costPerClick);
+    const clicksRemaining = totalPurchasedClicks - clicksUsed;
+
+    let consumptionRate = 0;
+    if (totalPurchasedClicks > 0) {
+      consumptionRate = Number(((clicksUsed / totalPurchasedClicks) * 100).toFixed(1));
     }
-
-    // ২. কয়টা ক্লিক বাকি আছে
-    const clicksRemaining = Math.max(0, Math.floor(currentBalance / costPerClick));
-
-    // ৩. কনজাম্পশন রেট (শতকরা কতটুকু শেষ হয়েছে)
-    const consumptionRate =
-      totalPurchasedClicks > 0 ? Number(((clicksUsed / totalPurchasedClicks) * 100).toFixed(1)) : 0;
 
     // --- Boost Calculation ---
     let daysRemaining = 0;
     let boostProgress = 0;
+    const now = new Date();
+
     if (boost.isActive && boost.expiresAt) {
-      const now = new Date();
       const expiry = new Date(boost.expiresAt);
-      const diffTime = expiry - now;
-      daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
-      boostProgress = Number(Math.min(100, Math.max(0, (daysRemaining / 30) * 100)).toFixed(1));
+      if (expiry > now) {
+        const diffTime = expiry - now;
+        daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        boostProgress = Number(Math.min(100, (daysRemaining / 30) * 100).toFixed(1));
+      } else {
+        daysRemaining = 0;
+        boostProgress = 0;
+      }
     }
 
     res.status(200).json({
@@ -166,8 +176,8 @@ export const getPromotionAnalytics = async (req, res) => {
           costPerClick: costPerClick.toFixed(2),
           totalPurchasedClicks,
           clicksUsed,
-          clicksRemaining,
-          consumptionRate: Math.min(100, consumptionRate), // ১০০% এর বেশি হবে না
+          clicksRemaining: Math.max(0, clicksRemaining),
+          consumptionRate: Math.min(100, consumptionRate),
         },
         boost: {
           isActive: !!(boost.isActive && daysRemaining > 0),
@@ -179,6 +189,6 @@ export const getPromotionAnalytics = async (req, res) => {
     });
   } catch (error) {
     console.error('Analytics Error:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Failed to load insights.' });
   }
 };

@@ -8,53 +8,63 @@ import autoTable from 'jspdf-autotable';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// --- Ranking & Promotion Logic (Improved for Intensity) ---
+// --- Ranking & Promotion Logic ---
 const applyPromotionLogic = (listing) => {
   let boostScore = 0;
   let ppcScore = 0;
+  const now = new Date();
 
-  if (listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date()) {
+  // ১. Viral Boost Calculation
+  if (listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now) {
     const amount = listing.promotion.boost.amountPaid || 0;
-    const now = new Date();
     const expiry = new Date(listing.promotion.boost.expiresAt);
     const diffTime = Math.abs(expiry - now);
     const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
-
     boostScore = (amount / daysLeft) * 10;
   }
 
+  // ২. PPC Logic
   if (listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0) {
     const cpc = listing.promotion.ppc.costPerClick || 0.1;
-
     ppcScore = cpc * 150;
   }
 
-  // ৩. Organic Engagement
+  // ৩. Engagement Score
   const engagementScore = (listing.views || 0) * 0.05 + (listing.favorites?.length || 0) * 1;
 
   listing.promotion.level = Math.floor(boostScore + ppcScore + engagementScore);
 
   const hasActivePpc = listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0;
   const hasActiveBoost =
-    listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date();
+    listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now;
   listing.isPromoted = !!(hasActivePpc || hasActiveBoost);
 
   return listing;
 };
 
-// --- Stripe Checkout ---
+// --- Create Checkout Session (With Double Payment Check) ---
 export const createCheckoutSession = async (req, res) => {
   try {
     const { listingId, packageType, amount, currency, currentPath, days, totalClicks } = req.body;
+
     const listing = await Listing.findById(listingId);
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    if (
-      packageType === 'boost' &&
-      listing.promotion.boost.isActive &&
-      listing.promotion.boost.expiresAt > new Date()
-    ) {
-      return res.status(400).json({ message: 'This listing already has an active Viral Boost.' });
+    const now = new Date();
+    const isBoostActive =
+      listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now;
+    const isPpcActive = listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0;
+
+    // If the user tries to buy a boost while one is active, or tries to buy PPC while they still have balance, prevent it.
+    if (packageType === 'boost' && isBoostActive) {
+      return res.status(400).json({ message: 'A Viral Boost is already active on this listing.' });
+    }
+
+    // If PPC is active and user tries to buy more clicks, prevent it until balance is exhausted. This encourages users to use up their existing balance before purchasing more.
+    if (packageType === 'ppc' && isPpcActive) {
+      return res
+        .status(400)
+        .json({ message: 'Current PPC balance must be exhausted before purchasing more clicks.' });
     }
 
     const calculatedCPC =
@@ -70,7 +80,7 @@ export const createCheckoutSession = async (req, res) => {
               name: `${packageType.toUpperCase()} Promotion: ${listing.title}`,
               description:
                 packageType === 'boost'
-                  ? `Active for ${days} days`
+                  ? `Validity: ${days} days`
                   : `Credit for ${totalClicks} clicks`,
             },
             unit_amount: Math.round(Number(amount) * 100),
@@ -93,11 +103,12 @@ export const createCheckoutSession = async (req, res) => {
 
     res.status(200).json({ url: session.url });
   } catch (error) {
+    console.error('Stripe Session Error:', error);
     res.status(500).json({ message: 'Payment initialization failed.' });
   }
 };
 
-// --- Webhook with Retry Logic for WriteConflict ---
+// --- Webhook with Retry & Logic Updates ---
 export const handleStripeWebhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
@@ -110,9 +121,8 @@ export const handleStripeWebhook = async (req, res) => {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    const { listingId, packageType, creatorId, days, totalClicks } = session.metadata;
+    const { listingId, packageType, creatorId, days, totalClicks, costPerClick } = session.metadata;
 
-    // Retry Logic for MongoDB Transactions
     let retries = 3;
     while (retries > 0) {
       const dbSession = await mongoose.startSession();
@@ -122,7 +132,7 @@ export const handleStripeWebhook = async (req, res) => {
         const fxRate = session.currency === 'usd' ? 0.92 : 1;
         const amountInEUR = Number((amountPaid * fxRate).toFixed(2));
 
-        // ১. ট্রানজেকশন রেকর্ড
+        // Transaction record create
         await Transaction.create(
           [
             {
@@ -141,7 +151,7 @@ export const handleStripeWebhook = async (req, res) => {
           { session: dbSession }
         );
 
-        // ২. লিস্টিং আপডেট
+        // Update Listing Promotion
         const listing = await Listing.findById(listingId).session(dbSession);
         if (!listing) throw new Error('Listing not found');
 
@@ -157,28 +167,27 @@ export const handleStripeWebhook = async (req, res) => {
             ((listing.promotion.ppc.ppcBalance || 0) + amountInEUR).toFixed(2)
           );
           listing.promotion.ppc.amountPaid = (listing.promotion.ppc.amountPaid || 0) + amountInEUR;
+          listing.promotion.ppc.costPerClick = Number(costPerClick);
 
-          // এখানে CPC ক্যালকুলেট হচ্ছে (বেশি টাকা / কম ক্লিক = High CPC)
-          const newCPC = Number((amountInEUR / parseInt(totalClicks)).toFixed(2));
-          listing.promotion.ppc.costPerClick = newCPC;
           listing.promotion.ppc.totalClicks =
             (listing.promotion.ppc.totalClicks || 0) + parseInt(totalClicks);
+
         }
 
-        // ৩. ইনটেনসিটি লজিক অ্যাপ্লাই
+        // Re-apply promotion logic to update listing's promoted status and level
         applyPromotionLogic(listing);
 
         await listing.save({ session: dbSession });
         await dbSession.commitTransaction();
-        break; // সফল হলে লুপ থেকে বের হয়ে যাবে
+        console.log(`Successfully processed ${packageType} for listing ${listingId}`);
+        break;
       } catch (error) {
         await dbSession.abortTransaction();
         retries--;
         if (error.code === 112 && retries > 0) {
-          console.log(`WriteConflict detected. Retrying... (${retries} left)`);
-          await new Promise((res) => setTimeout(res, 500)); // ০.৫ সেকেন্ড ওয়েট
+          await new Promise((res) => setTimeout(res, 500));
         } else {
-          console.error('Webhook Final Error:', error);
+          console.error('Webhook processing failed:', error);
           break;
         }
       } finally {

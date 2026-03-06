@@ -7,9 +7,7 @@ import User from '../models/User.js';
 import mongoose from 'mongoose';
 import { calculateListingLevel } from '../utils/levelCalculator.js';
 import Analytics from '../models/Analytics.js';
-
-const clickCooldowns = new Map();
-const viewCache = new Map();
+import InteractionLog from '../models/InteractionLog.js';
 
 export const getCategoriesAndTags = async (req, res) => {
   try {
@@ -323,120 +321,197 @@ export const getPublicListings = async (req, res) => {
   }
 };
 
-export const handlePpcClick = async (req, res) => {
-  try {
-    const listingId = req.params.id;
-    const userIP =
-      req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown';
-    const cacheKey = `ppc_${userIP}_${listingId}`;
-    const now = Date.now();
+// const clickCooldowns = new Map();
+// const viewCache = new Map();
 
-    // ১. ১ মিনিটের কুলডাউন চেক
-    if (clickCooldowns.has(cacheKey)) {
-      const lastClick = clickCooldowns.get(cacheKey);
-      if (now - lastClick < 60000) {
-        const simpleListing = await Listing.findById(listingId).select('websiteLink');
-        return res
-          .status(200)
-          .json({ success: true, redirectUrl: simpleListing?.websiteLink || '/' });
-      }
-    }
+// export const handlePpcClick = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const userIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // ২. রিকোয়েস্ট পাওয়ার সাথে সাথেই কুলডাউন সেট করে দিন (Locking early)
-    clickCooldowns.set(cacheKey, now);
+//     const listing = await Listing.findById(id);
+//     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    const listing = await Listing.findById(listingId);
-    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+//     // ১. চেক: পিপিছি একটিভ আছে কি না
+//     if (!listing.promotion.ppc.isActive || listing.promotion.ppc.ppcBalance <= 0) {
+//       return res.status(200).json({ success: true, message: 'Organic click, no deduction.' });
+//     }
 
-    const cost = listing.promotion?.ppc?.costPerClick || 0.1;
-    let wasCharged = false;
+//     // ২. ২৪ ঘণ্টা রেস্ট্রিকশন চেক (Analytics মডেল ব্যবহার করে)
+//     const now = new Date();
+//     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    if (
-      listing.isPromoted &&
-      listing.promotion?.ppc?.isActive &&
-      listing.promotion?.ppc?.ppcBalance >= cost
-    ) {
-      const newBalance = Number((listing.promotion.ppc.ppcBalance - cost).toFixed(2));
-      const shouldDeactivate = newBalance < cost;
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+//     // আমরা এনালাইটিক্স মডেলে চেক করবো এই IP থেকে গত ২৪ ঘণ্টায় কোনো ক্লিক হয়েছে কি না
+//     // এর জন্য এনালাইটিক্স মডেলে 'userIp' ফিল্ডটি থাকলে ভালো হয়, নাহলে আমরা ডেট দিয়ে চেক করছি
+//     const today = new Date();
+//     today.setHours(0, 0, 0, 0);
 
-      // ৩. এটমিক আপডেট
-      await Promise.all([
-        Listing.findByIdAndUpdate(listingId, {
-          $set: {
-            'promotion.ppc.ppcBalance': newBalance,
-            'promotion.ppc.isActive': !shouldDeactivate,
-            isPromoted: listing.promotion.boost.isActive || !shouldDeactivate,
-          },
-          $inc: { 'promotion.ppc.totalClicks': 1 },
-        }),
-        Analytics.findOneAndUpdate(
-          { listingId: listing._id, creatorId: listing.creatorId, date: today },
-          { $inc: { clicks: 1 } },
-          { upsert: true, returnDocument: 'after' }
-        ),
-      ]);
+//     // লজিক: একই লিস্টিং এ ২৪ ঘণ্টার মধ্যে ডাবল ক্লিক ডিডাকশন হবে না
+//     // এখানে আমরা চেক করছি যদি অলরেডি ক্লিক কাউন্ট হয়ে থাকে তবে শুধু রিটার্ন করবে
+//     // (প্রফেশনাল সিস্টেমে এখানে IP Log টেবিল লাগে, আমরা Analytics দিয়ে ম্যানেজ করছি)
 
-      wasCharged = true;
-    }
+//     const stats = await Analytics.findOneAndUpdate(
+//       { listingId: id, date: today },
+//       { $setOnInsert: { creatorId: listing.creatorId, listingId: id, date: today } },
+//       { upsert: true, new: true }
+//     );
 
-    // ক্লিনআপ কুলডাউন ৫ মিনিট পর
-    setTimeout(() => clickCooldowns.delete(cacheKey), 300000);
+//     // যদি ব্যালেন্স থাকে তবেই টাকা কাটবো
+//     const cost = listing.promotion.ppc.costPerClick || 0.1;
 
-    res.status(200).json({
-      success: true,
-      redirectUrl: listing.websiteLink || '/',
-      charged: wasCharged,
-    });
-  } catch (error) {
-    console.error('PPC Click Error:', error);
-    res.status(500).json({ success: false });
-  }
-};
+//     if (listing.promotion.ppc.ppcBalance >= cost) {
+//       listing.promotion.ppc.ppcBalance = Number(
+//         (listing.promotion.ppc.ppcBalance - cost).toFixed(2)
+//       );
+//       listing.promotion.ppc.executedClicks += 1;
+
+//       // এনালাইটিক্স আপডেট
+//       stats.clicks += 1;
+//       await stats.save();
+
+//       // যদি ব্যালেন্স ০ হয়ে যায় তবে ক্যাম্পেইন অফ করে দাও
+//       if (listing.promotion.ppc.ppcBalance <= 0) {
+//         listing.promotion.ppc.isActive = false;
+//         listing.isPromoted = listing.promotion.boost.isActive;
+//       }
+
+//       await listing.save();
+//       return res.status(200).json({ success: true, balance: listing.promotion.ppc.ppcBalance });
+//     }
+
+//     res.status(200).json({ success: true, message: 'Insufficient balance for deduction.' });
+//   } catch (error) {
+//     console.error('PPC Click Error:', error);
+//     res.status(500).json({ message: 'Internal server error' });
+//   }
+// };
+
+// export const getListingById = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const userIp = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+//     const listing = await Listing.findById(id)
+//       .populate('creatorId', 'firstName lastName username profile.image')
+//       .populate('category', 'title')
+//       .populate('culturalTags', 'title image');
+
+//     if (!listing) return res.status(404).json({ message: 'Listing not found' });
+
+//     // View Tracking with simple IP-based cooldown
+//     const today = new Date();
+//     today.setHours(0, 0, 0, 0);
+
+//     listing.views += 1;
+//     await listing.save();
+
+//     res.status(200).json(listing);
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
 
 export const getListingById = async (req, res) => {
   try {
     const { id } = req.params;
-    const clientIp =
-      req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || 'unknown';
-    const cacheKey = `view_${id}_${clientIp}`;
+    const userIp = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
-    const now = Date.now();
-    const cooldown = 24 * 60 * 60 * 1000;
-
-    let listing = await Listing.findById(id)
-      .populate('creatorId', 'username firstName lastName profile email')
-      .populate('category', 'title')
-      .populate('culturalTags', 'title image');
+    const listing = await Listing.findById(id)
+      .populate('creatorId', 'firstName lastName username profile.image')
+      .populate('category', 'title');
 
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    const lastViewed = viewCache.get(cacheKey);
+    // ২৪ ঘণ্টা ভিউ চেক
+    const alreadyViewed = await InteractionLog.findOne({
+      listingId: id,
+      ip: userIp,
+      type: 'view',
+    });
 
-    if (!lastViewed || now - lastViewed > cooldown) {
-      viewCache.set(cacheKey, now); // ১ দিন পর্যন্ত এই আইপি থেকে আর ভিউ বাড়বে না
+    if (!alreadyViewed) {
+      // ডাটাবেসে ভিউ বাড়ানো
+      listing.views += 1;
+      await listing.save();
 
+      // লগ তৈরি করা
+      await InteractionLog.create({ listingId: id, ip: userIp, type: 'view' });
+
+      // এনালাইটিক্স আপডেট (Daily Stats)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-
-      // সরাসরি এটমিক আপডেট (কোনো ডাবল কাউন্ট হবে না)
-      await Promise.all([
-        Listing.findByIdAndUpdate(id, { $inc: { views: 1 } }),
-        Analytics.findOneAndUpdate(
-          { listingId: listing._id, creatorId: listing.creatorId, date: today },
-          { $inc: { views: 1 } },
-          { upsert: true, returnDocument: 'after' }
-        ),
-      ]);
-
-      listing.views += 1;
+      await Analytics.findOneAndUpdate(
+        { listingId: id, date: today },
+        { $inc: { views: 1 }, $setOnInsert: { creatorId: listing.creatorId } },
+        { upsert: true }
+      );
     }
 
     res.status(200).json(listing);
   } catch (error) {
-    console.error('View Tracking Error:', error);
-    res.status(500).json({ success: false, message: 'Server Error' });
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const handlePpcClick = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userIp = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+    const listing = await Listing.findById(id);
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+
+    // পিপিছি একটিভ চেক
+    if (!listing.promotion.ppc.isActive || listing.promotion.ppc.ppcBalance <= 0) {
+      return res.status(200).json({ message: 'Organic click.' });
+    }
+
+    // ২৪ ঘণ্টা ক্লিক চেক (একই আইপি থেকে ২৪ ঘণ্টায় একবারই টাকা কাটবে)
+    const alreadyClicked = await InteractionLog.findOne({
+      listingId: id,
+      ip: userIp,
+      type: 'ppc_click',
+    });
+
+    if (alreadyClicked) {
+      return res.status(200).json({ message: 'Click already recorded for today.' });
+    }
+
+    const cost = listing.promotion.ppc.costPerClick || 0.1;
+
+    if (listing.promotion.ppc.ppcBalance >= cost) {
+      // টাকা কাটা এবং ক্লিক কাউন্ট বাড়ানো
+      listing.promotion.ppc.ppcBalance = Number(
+        (listing.promotion.ppc.ppcBalance - cost).toFixed(2)
+      );
+      listing.promotion.ppc.executedClicks += 1;
+
+      // যদি ব্যালেন্স শেষ হয়ে যায়
+      if (listing.promotion.ppc.ppcBalance <= 0) {
+        listing.promotion.ppc.isActive = false;
+        listing.isPromoted =
+          listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date();
+      }
+
+      await listing.save();
+
+      // লগ এবং এনালাইটিক্স আপডেট
+      await InteractionLog.create({ listingId: id, ip: userIp, type: 'ppc_click' });
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      await Analytics.findOneAndUpdate(
+        { listingId: id, date: today },
+        { $inc: { clicks: 1 }, $setOnInsert: { creatorId: listing.creatorId } },
+        { upsert: true }
+      );
+
+      return res.status(200).json({ success: true, balance: listing.promotion.ppc.ppcBalance });
+    }
+
+    res.status(400).json({ message: 'Insufficient balance.' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
 

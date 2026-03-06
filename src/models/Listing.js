@@ -28,6 +28,7 @@ const listingSchema = new mongoose.Schema(
         ppcBalance: { type: Number, default: 0 },
         costPerClick: { type: Number, default: 0.1 },
         totalClicks: { type: Number, default: 0 },
+        executedClicks: { type: Number, default: 0 }, 
         amountPaid: { type: Number, default: 0 },
       },
     },
