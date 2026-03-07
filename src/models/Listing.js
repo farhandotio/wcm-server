@@ -1,73 +1,93 @@
-import mongoose from 'mongoose';
+import cron from 'node-cron';
+import Listing from '../models/Listing.js';
 
-const roundToTwo = (v) => Math.round(v * 100) / 100;
+const startPromotionCleaner = () => {
+  // প্রতি মিনিটে রান করবে
+  cron.schedule('* * * * *', async () => {
+    try {
+      const now = new Date();
 
-const listingSchema = new mongoose.Schema(
-  {
-    creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    title: { type: String, required: true, trim: true },
-    description: { type: String, required: true, trim: true },
-    externalUrls: [{ type: String, trim: true }],
-    websiteLink: { type: String, trim: true },
-    region: { type: String, required: true },
-    country: { type: String, required: true },
-    tradition: { type: String, required: true },
-    category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
-    culturalTags: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Tag' }],
-    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
-    rejectionReason: { type: String, trim: true, default: '' },
-    image: { type: String, required: true },
-    favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    promotion: {
-      level: { type: Number, default: 0 },
-      boost: {
-        isActive: { type: Boolean, default: false },
-        expiresAt: { type: Date },
-        amountPaid: {
-          type: Number,
-          default: 0,
-          set: roundToTwo, 
+      // ১. মেয়াদ উত্তীর্ণ বুস্ট অফ করা
+      await Listing.updateMany(
+        { 'promotion.boost.isActive': true, 'promotion.boost.expiresAt': { $lt: now } },
+        { $set: { 'promotion.boost.isActive': false } }
+      );
+
+      // ২. ব্যালেন্স শেষ অথবা CPC ব্যালেন্সের চেয়ে বেশি হলে PPC অফ করা (আপনার রিকোয়েস্ট অনুযায়ী)
+      // লজিক: isActive: true কিন্তু (balance <= 0) অথবা (balance < costPerClick)
+      const listingsToDisablePpc = await Listing.find({
+        'promotion.ppc.isActive': true,
+        $or: [
+          { 'promotion.ppc.ppcBalance': { $lte: 0 } },
+          { $expr: { $lt: ['$promotion.ppc.ppcBalance', '$promotion.ppc.costPerClick'] } },
+        ],
+      });
+
+      if (listingsToDisablePpc.length > 0) {
+        const ids = listingsToDisablePpc.map((l) => l._id);
+        await Listing.updateMany(
+          { _id: { $in: ids } },
+          {
+            $set: {
+              'promotion.ppc.isActive': false,
+              'promotion.ppc.ppcBalance': 0, // সেফটির জন্য জিরো করে দেওয়া
+              'promotion.ppc.amountPaid': 0,
+              'promotion.ppc.totalClicks': 0,
+              'promotion.ppc.executedClicks': 0,
+            },
+          }
+        );
+      }
+
+      // ৩. যাদের বুস্ট এবং পিপিছি দুটোই অফ, তাদের isPromoted এবং level রিসেট করা
+      await Listing.updateMany(
+        {
+          isPromoted: true,
+          'promotion.boost.isActive': false,
+          'promotion.ppc.isActive': false,
         },
-      },
-      ppc: {
-        isActive: { type: Boolean, default: false },
-        ppcBalance: {
-          type: Number,
-          default: 0,
-          set: roundToTwo,
-        },
-        costPerClick: {
-          type: Number,
-          default: 0.1,
-          set: roundToTwo,
-        },
-        totalClicks: { type: Number, default: 0 },
-        executedClicks: { type: Number, default: 0 },
-        amountPaid: {
-          type: Number,
-          default: 0,
-          set: roundToTwo,
-        },
-      },
-    },
-    isPromoted: { type: Boolean, default: false },
-    views: { type: Number, default: 0 },
-  },
-  { timestamps: true }
-);
+        { $set: { isPromoted: false, 'promotion.level': 0 } }
+      );
 
-listingSchema.index({
-  title: 'text',
-  description: 'text',
-  country: 'text',
-  region: 'text',
-  tradition: 'text',
-});
+      // ৪. একটিভ লিস্টিংগুলোর লেভেল রি-ক্যালকুলেশন
+      const activeListings = await Listing.find({
+        $or: [{ 'promotion.boost.isActive': true }, { 'promotion.ppc.isActive': true }],
+      });
 
-listingSchema.index({ isPromoted: 1 });
-listingSchema.index({ status: 1 });
-listingSchema.index({ 'promotion.boost.isActive': 1, 'promotion.boost.expiresAt': 1 });
-listingSchema.index({ 'promotion.ppc.isActive': 1, 'promotion.ppc.ppcBalance': 1 });
+      if (activeListings.length > 0) {
+        const bulkOps = activeListings.map((listing) => {
+          let level = 0;
 
-const Listing = mongoose.model('Listing', listingSchema);
-export default Listing;
+          // বুস্ট স্কোর
+          if (listing.promotion.boost.isActive) {
+            // ১০ ইউরো = ২০ লেভেল লজিক (১ ইউরোতে ২.৮৫ লেভেল প্রায়)
+            level += (listing.promotion.boost.amountPaid / 7) * 2;
+          }
+
+          // পিপিছি স্কোর
+          if (listing.promotion.ppc.isActive && listing.promotion.ppc.ppcBalance > 0) {
+            level +=
+              listing.promotion.ppc.costPerClick * 10 + listing.promotion.ppc.ppcBalance / 10;
+          }
+
+          return {
+            updateOne: {
+              filter: { _id: listing._id },
+              update: {
+                $set: {
+                  'promotion.level': Math.floor(level),
+                  isPromoted: true, // যদি কোনো একটি একটিভ থাকে তবে এটি true থাকবে
+                },
+              },
+            },
+          };
+        });
+        await Listing.bulkWrite(bulkOps);
+      }
+    } catch (error) {
+      console.error('Cron Cleaner Error:', error);
+    }
+  });
+};
+
+export default startPromotionCleaner;
