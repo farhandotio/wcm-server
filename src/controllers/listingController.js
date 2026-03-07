@@ -321,17 +321,12 @@ export const getPublicListings = async (req, res) => {
   }
 };
 
-// --- IP Helper ---
-const getClientIp = (req) => {
-  return req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || req.ip;
-};
-
 export const getListingById = async (req, res) => {
   try {
     const { id } = req.params;
-    const userIp = getClientIp(req);
-    const userAgent = req.headers['user-agent'];
-    const userId = req.user?._id; // যদি মিডলওয়্যার থেকে ইউজার আইডি পাওয়া যায়
+    const { deviceId } = req.query; // ফ্রন্টএন্ড থেকে কুয়েরি প্যারাম হিসেবে আসবে
+    const userAgent = req.headers['user-agent'] || 'unknown_browser';
+    const userId = req.user?._id;
 
     const listing = await Listing.findById(id)
       .populate('creatorId', 'firstName lastName username profile.profileImage')
@@ -340,31 +335,31 @@ export const getListingById = async (req, res) => {
 
     if (!listing) return res.status(404).json({ success: false, message: 'Listing not found' });
 
-    // ১. ভিউ চেক করার জন্য কুয়েরি (IP এবং User Agent এর কম্বিনেশন অথবা UserId)
-    // শুধু IP দিলে একই অফিসের বা বাসার সবার ভিউ ব্লক হয়ে যায়
+    // ১. ডুপ্লিকেট ভিউ চেক লজিক (deviceId অগ্রাধিকার পাবে)
     const viewQuery = {
       listingId: id,
       type: 'view',
-      $or: [
-        { ip: userIp, userAgent: userAgent }, // একই আইপি কিন্তু ভিন্ন ব্রাউজার হলে ভিউ হবে
-      ],
     };
 
     if (userId) {
-      viewQuery.$or.push({ userId: userId });
+      viewQuery.userId = userId;
+    } else if (deviceId) {
+      viewQuery.deviceId = deviceId; // ফ্রন্টএন্ড থেকে আসা ইউনিক ফিঙ্গারপ্রিন্ট
+    } else {
+      viewQuery.userAgent = userAgent; // ব্যাকআপ হিসেবে
     }
 
     const alreadyViewed = await InteractionLog.findOne(viewQuery);
 
     if (!alreadyViewed) {
-      // ২. অ্যাটমিক আপডেট (সরাসরি ডাটাবেজে ভিউ বাড়ানো)
+      // ২. ভিউ বাড়ানো
       await Listing.findByIdAndUpdate(id, { $inc: { views: 1 } });
 
-      // ৩. ইন্টারঅ্যাকশন লগ তৈরি
+      // ৩. লগ তৈরি (deviceId সহ)
       await InteractionLog.create({
         listingId: id,
         userId: userId || null,
-        ip: userIp,
+        deviceId: deviceId || null,
         userAgent: userAgent,
         type: 'view',
       });
@@ -372,7 +367,6 @@ export const getListingById = async (req, res) => {
       // ৪. অ্যানালিটিক্স আপডেট
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-
       await Analytics.findOneAndUpdate(
         { listingId: id, date: today },
         {
@@ -385,7 +379,6 @@ export const getListingById = async (req, res) => {
 
     res.status(200).json(listing);
   } catch (error) {
-    console.error('View Count Error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -393,78 +386,84 @@ export const getListingById = async (req, res) => {
 export const handlePpcClick = async (req, res) => {
   try {
     const { id } = req.params;
-    const userIp = getClientIp(req);
-    const userId = req.user?._id; // Auth Middleware থেকে আসবে
-    const userAgent = req.headers['user-agent'];
+    const { deviceId } = req.body;
+    const userId = req.user?._id;
+
+    if (!deviceId) return res.status(400).json({ message: 'Security token missing.' });
 
     const listing = await Listing.findById(id);
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    // ১. PPC একটিভ না থাকলে অর্গানিক ক্লিক হিসেবে রিটার্ন
+    // ১. পিপিইউ ক্যাম্পেইন অ্যাক্টিভ কি না চেক
     if (!listing.promotion?.ppc?.isActive || listing.promotion.ppc.ppcBalance <= 0) {
       return res.status(200).json({ success: true, message: 'Organic click.' });
     }
 
-    // ২. ডুপ্লিকেট ক্লিক চেক (User ID অথবা IP দিয়ে)
-    const query = {
+    // ২. ইউনিক চেক (Device ID বা User ID)
+    const alreadyClicked = await InteractionLog.findOne({
       listingId: id,
       type: 'ppc_click',
-      $or: [{ ip: userIp }],
-    };
-    if (userId) query.$or.push({ userId: userId });
-
-    const alreadyClicked = await InteractionLog.findOne(query);
+      $or: [{ deviceId: deviceId }, ...(userId ? [{ userId: userId }] : [])],
+    });
 
     if (alreadyClicked) {
-      return res.status(200).json({ message: 'Click already recorded for this session.' });
+      return res.status(200).json({ message: 'Duplicate click ignored.' });
     }
 
     const cost = listing.promotion.ppc.costPerClick || 0.1;
 
-    // ৩. ব্যালেন্স কাটা এবং পিপিইউ রিফ্রেশ লজিক
+    // ৩. ব্যালেন্স কাটা এবং র‍্যাঙ্কিং আপডেট
     if (listing.promotion.ppc.ppcBalance >= cost) {
       listing.promotion.ppc.ppcBalance = Number(
         (listing.promotion.ppc.ppcBalance - cost).toFixed(4)
       );
       listing.promotion.ppc.executedClicks += 1;
 
-      // পিপিইউ ব্যালেন্স শেষ হয়ে গেলে রিসেট লজিক
+      // ব্যালেন্স শেষ হয়ে গেলে পিপিইউ ফিল্ডগুলো রিসেট করা
       if (listing.promotion.ppc.ppcBalance < 0.01) {
         listing.promotion.ppc.isActive = false;
         listing.promotion.ppc.ppcBalance = 0;
-        listing.promotion.ppc.amountPaid = 0; // ডাটাবেজে পেমেন্ট রিফ্রেশ/রিসেট
-
-        const now = new Date();
-        const hasBoost =
-          listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now;
-        listing.isPromoted = hasBoost;
+        listing.promotion.ppc.amountPaid = 0;
+        listing.promotion.ppc.totalClicks = 0; // আপনার রিকোয়েস্ট অনুযায়ী ফুল রিফ্রেশ
+        listing.promotion.ppc.executedClicks = 0; // নতুন ক্যাম্পেইনের জন্য রিসেট
       }
+
+      // --- গুরুত্বপূর্ণ: প্রমোশন লজিক পুনরায় অ্যাপ্লাই করা ---
+      // পিপিইউ ব্যালেন্স কমার সাথে সাথে লিস্টিংয়ের level এবং isPromoted স্ট্যাটাস আপডেট হবে
+      applyPromotionLogic(listing);
 
       await listing.save();
 
-      // ৪. লগ তৈরি (User ID সহ)
+      // ৪. লগ তৈরি
       await InteractionLog.create({
         listingId: id,
         userId: userId || null,
-        ip: userIp,
+        deviceId: deviceId,
         type: 'ppc_click',
-        userAgent: userAgent,
       });
 
-      // ৫. অ্যানালিটিক্স
+      // ৫. অ্যানালিটিক্স আপডেট
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       await Analytics.findOneAndUpdate(
         { listingId: id, date: today },
-        { $inc: { clicks: 1 }, $setOnInsert: { creatorId: listing.creatorId } },
+        {
+          $inc: { clicks: 1 },
+          $setOnInsert: { creatorId: listing.creatorId?._id || listing.creatorId },
+        },
         { upsert: true }
       );
 
-      return res.status(200).json({ success: true, balance: listing.promotion.ppc.ppcBalance });
+      return res.status(200).json({
+        success: true,
+        balance: listing.promotion.ppc.ppcBalance,
+        currentLevel: listing.promotion.level, // ফ্রন্টএন্ডে আপডেট লেভেল দেখানোর জন্য
+      });
     }
 
-    res.status(400).json({ message: 'Insufficient PPC balance.' });
+    res.status(400).json({ message: 'Insufficient balance.' });
   } catch (error) {
+    console.error('PPC Click Error:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -519,31 +518,40 @@ export const getMyListings = async (req, res) => {
 export const toggleFavorite = async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user._id;
+    const userId = req.user?._id; // মিডলওয়্যার থেকে ইউজার আইডি
+
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
 
     const listing = await Listing.findById(id);
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
+    // ১. ফেভারিট অ্যাড বা রিমুভ করা
     const isFavorited = listing.favorites.includes(userId);
+
     if (isFavorited) {
       listing.favorites.pull(userId);
     } else {
       listing.favorites.addToSet(userId);
     }
 
-    listing.promotion.level = calculateListingLevel(listing);
+    // ২. প্রোমোশন লজিক এবং লেভেল আপডেট
+    // ফেভারিট কাউন্ট পরিবর্তনের ফলে র‍্যাঙ্কিং লেভেল অটোমেটিক আপডেট হবে
+    applyPromotionLogic(listing);
 
     await listing.save();
 
+    // ৩. রেসপন্স পাঠানো
     res.status(200).json({
+      success: true,
       message: isFavorited ? 'Removed from favorites' : 'Added to favorites',
       isFavorited: !isFavorited,
       favoritesCount: listing.favorites.length,
-      newLevel: listing.promotion.level,
+      newLevel: listing.promotion.level, // আপডেট হওয়া লেভেল
+      isPromoted: listing.isPromoted, // বুস্ট বা লেভেলের কারণে প্রমোটেড কি না
     });
   } catch (error) {
     console.error('Favorite Toggle Error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
