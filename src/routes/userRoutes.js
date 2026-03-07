@@ -13,11 +13,10 @@ import {
   getFamousCreators,
 } from '../controllers/userController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
-import { authLimiter } from '../middlewares/rateLimiter.js';
 
 const router = express.Router();
 
-router.post('/register', authLimiter, registerUser);
+router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.post('/logout', logoutUser);
 router.delete('/delete-account', authMiddleware, deleteUserAccount);
@@ -28,7 +27,7 @@ router.get('/profile/:id', getPublicProfile);
 
 router.put(
   '/update-profile',
-  authLimiter,
+
   authMiddleware,
   upload.fields([
     { name: 'profileImage', maxCount: 1 },

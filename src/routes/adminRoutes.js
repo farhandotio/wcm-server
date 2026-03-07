@@ -23,7 +23,6 @@ import {
 } from '../controllers/adminController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 import upload from '../config/multer.js';
-import { authLimiter } from '../middlewares/rateLimiter.js';
 
 const router = express.Router();
 
@@ -32,12 +31,12 @@ router.use(authorizeRoles('admin'));
 
 router.get('/stats', getAdminStats);
 router.get('/transactions', getAllTransactions);
-router.get('/export-transactions', authLimiter, exportTransactionsExcel);
+router.get('/export-transactions', exportTransactionsExcel);
 router.get('/listings', manageListings);
 router.get('/promoted-listings', getPromotedListings);
 router.get('/users', getAllUsers);
 router.get('/creator-requests', getCreatorRequests);
-router.get('/export-users', authLimiter, exportUsersExcel);
+router.get('/export-users', exportUsersExcel);
 
 router.post('/categories', createCategory);
 router.post('/tags', upload.single('image'), createTag);
