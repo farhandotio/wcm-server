@@ -1,5 +1,9 @@
 import express from 'express';
-import { getCreatorDashboardStats, getMyTransactions, getPromotionAnalytics } from '../controllers/creatorController.js';
+import {
+  getCreatorDashboardStats,
+  getMyTransactions,
+  getPromotionAnalytics,
+} from '../controllers/creatorController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
 const router = express.Router();

@@ -371,65 +371,6 @@ export const getListingById = async (req, res) => {
   }
 };
 
-// export const handlePpcClick = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const userIp = getClientIp(req);
-
-//     const listing = await Listing.findById(id);
-//     if (!listing) return res.status(404).json({ message: 'Listing not found' });
-
-//     if (!listing.promotion?.ppc?.isActive || listing.promotion.ppc.ppcBalance <= 0) {
-//       return res.status(200).json({ success: true, message: 'Organic click.' });
-//     }
-
-//     const alreadyClicked = await InteractionLog.findOne({
-//       listingId: id,
-//       ip: userIp,
-//       type: 'ppc_click',
-//     });
-
-//     if (alreadyClicked) {
-//       return res.status(200).json({ message: 'Click already recorded.' });
-//     }
-
-//     const cost = listing.promotion.ppc.costPerClick || 0.1;
-
-//     if (listing.promotion.ppc.ppcBalance >= cost) {
-//       listing.promotion.ppc.ppcBalance = Number(
-//         (listing.promotion.ppc.ppcBalance - cost).toFixed(4)
-//       );
-//       listing.promotion.ppc.executedClicks += 1;
-
-//       if (listing.promotion.ppc.ppcBalance < 0.01) {
-//         listing.promotion.ppc.isActive = false;
-//         const now = new Date();
-//         const hasBoost =
-//           listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > now;
-//         listing.isPromoted = hasBoost;
-//       }
-
-//       await listing.save();
-
-//       await InteractionLog.create({ listingId: id, ip: userIp, type: 'ppc_click' });
-
-//       const today = new Date();
-//       today.setHours(0, 0, 0, 0);
-//       await Analytics.findOneAndUpdate(
-//         { listingId: id, date: today },
-//         { $inc: { clicks: 1 }, $setOnInsert: { creatorId: listing.creatorId } },
-//         { upsert: true }
-//       );
-
-//       return res.status(200).json({ success: true, balance: listing.promotion.ppc.ppcBalance });
-//     }
-
-//     res.status(400).json({ message: 'Insufficient PPC balance.' });
-//   } catch (error) {
-//     res.status(500).json({ message: error.message });
-//   }
-// };
-
 export const handlePpcClick = async (req, res) => {
   try {
     const { id } = req.params;

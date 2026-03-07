@@ -9,6 +9,7 @@ import adminRoutes from './routes/adminRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import creatorRoutes from './routes/creatorRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
+import { globalLimiter } from './middlewares/rateLimiter.js';
 
 const app = express();
 const __dirname = path.resolve();
@@ -23,7 +24,11 @@ app.use(
 );
 
 app.use(cookieParser());
+
+app.use('/api', globalLimiter);
+
 app.use('/api/payments', paymentRoutes);
+
 app.use(express.json());
 
 app.use('/api/users', userRoutes);
