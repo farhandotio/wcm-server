@@ -348,7 +348,7 @@ export const getPublicListings = async (req, res) => {
 export const getListingById = async (req, res) => {
   try {
     const { id } = req.params;
-    const { deviceId } = req.query; // ফ্রন্টএন্ড থেকে আসা ফিঙ্গারপ্রিন্ট
+    const { deviceId } = req.query;
     const userId = req.user?._id;
     const userAgent = req.headers['user-agent'] || 'unknown';
 
@@ -359,45 +359,56 @@ export const getListingById = async (req, res) => {
 
     if (!listing) return res.status(404).json({ success: false, message: 'Listing not found' });
 
-    // ভিউ ডুপ্লিকেট চেক (deviceId অগ্রাধিকার পাবে)
-    const viewQuery = { listingId: id, type: 'view' };
+    // ১. ভিউ চেক কুয়েরি
+    const viewQuery = {
+      listingId: id,
+      type: 'view',
+    };
+
     if (userId) {
       viewQuery.userId = userId;
-    } else if (deviceId) {
+    } else if (deviceId && deviceId !== 'undefined') {
       viewQuery.deviceId = deviceId;
     } else {
       viewQuery.userAgent = userAgent;
     }
 
+    // ২. চেক করা হচ্ছে আগে ভিউ করেছে কি না
     const alreadyViewed = await InteractionLog.findOne(viewQuery);
 
     if (!alreadyViewed) {
-      // অ্যাটমিক আপডেট (ভিউ বাড়ানো)
+      // ৩. লিস্টিং মডেলে ভিউ বাড়ানো
       await Listing.findByIdAndUpdate(id, { $inc: { views: 1 } });
 
-      // লগ তৈরি (deviceId optional রাখা হয়েছে যাতে এরর না দেয়)
+      // ৪. নতুন ভিউ লগ তৈরি
       await InteractionLog.create({
         listingId: id,
         userId: userId || null,
         deviceId: deviceId || 'guest_device',
+        userAgent: userAgent,
         type: 'view',
       });
 
-      // অ্যানালিটিক্স আপডেট
+      // ৫. অ্যানালিটিক্স আপডেট (Daily Stats এর জন্য)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
+
       await Analytics.findOneAndUpdate(
         { listingId: id, date: today },
         {
           $inc: { views: 1 },
           $setOnInsert: { creatorId: listing.creatorId?._id || listing.creatorId },
         },
-        { upsert: true }
+        { upsert: true, new: true }
       );
+
+      // লোকাল অবজেক্টে ভিউ ১ বাড়িয়ে দেয়া যাতে রেসপন্সে আপডেট দেখায়
+      listing.views += 1;
     }
 
     res.status(200).json(listing);
   } catch (error) {
+    console.error('View Error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

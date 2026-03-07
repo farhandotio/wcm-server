@@ -31,26 +31,14 @@ const listingSchema = new mongoose.Schema(
       },
       ppc: {
         isActive: { type: Boolean, default: false },
-        ppcBalance: {
-          type: Number,
-          default: 0,
-          set: roundToTwo,
-        },
-        costPerClick: {
-          type: Number,
-          default: 0.1,
-          set: roundToTwo,
-        },
+        ppcBalance: { type: Number, default: 0, set: roundToTwo },
+        costPerClick: { type: Number, default: 0.1, set: roundToTwo },
         totalClicks: { type: Number, default: 0 },
         executedClicks: { type: Number, default: 0 },
-        amountPaid: {
-          type: Number,
-          default: 0,
-          set: roundToTwo,
-          isPromoted: { type: Boolean, default: false },
-          views: { type: Number, default: 0 },
-        },
+        amountPaid: { type: Number, default: 0, set: roundToTwo },
       },
+      isPromoted: { type: Boolean, default: false },
+      views: { type: Number, default: 0 },
     },
   },
   { timestamps: true }
