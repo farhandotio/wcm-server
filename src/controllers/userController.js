@@ -301,14 +301,20 @@ export const getPublicProfile = async (req, res) => {
 // ১০. Famous Creators List with Advanced Filtering, Sorting, and Pagination
 export const getFamousCreators = async (req, res) => {
   try {
-    const { limit = 10, offset = 0, sortBy = 'listings', search = '', country = '' } = req.query;
+    const { 
+      limit = 10,
+      offset = 0, 
+      sortBy = 'listings',
+      search = '', 
+      country = '' 
+    } = req.query;
 
     const parsedLimit = parseInt(limit);
     const parsedOffset = parseInt(offset);
 
-    let userQuery = {
-      role: 'creator',
-      status: 'active',
+    let userQuery = { 
+      role: 'creator', 
+      status: 'active' 
     };
 
     // 🔎 Search filter
@@ -360,19 +366,25 @@ export const getFamousCreators = async (req, res) => {
                 input: '$allListings',
                 as: 'l',
                 in: {
-                  $cond: [{ $eq: ['$$l.status', 'approved'] }, '$$l.views', 0],
-                },
-              },
-            },
-          },
-        },
+                  $cond: [
+                    { $eq: ['$$l.status', 'approved'] },
+                    '$$l.views',
+                    0
+                  ]
+                }
+              }
+            }
+          }
+        }
       },
 
-      { $match: { totalListings: { $gt: 0 } } },
+      { $match: { totalListings: { $gt: 0 } } }
     ];
 
     // 🔥 Sorting
-    const sortField = sortBy === 'views' ? { totalViews: -1 } : { totalListings: -1 };
+    const sortField = sortBy === 'views'
+      ? { totalViews: -1 }
+      : { totalListings: -1 };
 
     aggregatePipeline.push({ $sort: sortField });
 
@@ -380,7 +392,10 @@ export const getFamousCreators = async (req, res) => {
     const countPipeline = [...aggregatePipeline];
 
     // ✅ OFFSET-BASED PAGINATION
-    aggregatePipeline.push({ $skip: parsedOffset }, { $limit: parsedLimit });
+    aggregatePipeline.push(
+      { $skip: parsedOffset },
+      { $limit: parsedLimit }
+    );
 
     const [creators, totalCountData] = await Promise.all([
       User.aggregate(aggregatePipeline),
@@ -396,9 +411,10 @@ export const getFamousCreators = async (req, res) => {
         total: totalCreators,
         limit: parsedLimit,
         offset: parsedOffset,
-        hasMore: parsedOffset + parsedLimit < totalCreators,
-      },
+        hasMore: parsedOffset + parsedLimit < totalCreators
+      }
     });
+
   } catch (error) {
     console.error('Famous Creators Tactical Error:', error);
     res.status(500).json({ message: 'Internal Server Error' });
