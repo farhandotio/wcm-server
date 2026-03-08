@@ -38,8 +38,8 @@ const listingSchema = new mongoose.Schema(
         amountPaid: { type: Number, default: 0, set: roundToTwo },
       },
       isPromoted: { type: Boolean, default: false },
-      views: { type: Number, default: 0 },
     },
+    views: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
