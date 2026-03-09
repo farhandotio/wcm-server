@@ -417,12 +417,13 @@ export const purchasePromotion = async (req, res) => {
         {
           creator: userId,
           listing: listingId,
-          amountPaid: amountInEUR,
+          amountInEUR: amountInEUR, // এখানে amountPaid এর বদলে Schema অনুযায়ী নাম দিন
+          amountPaid: amountInEUR, // যদি আপনার স্কিমাতে দুটোই থাকে তবে দুটোই দিন
           currency: 'EUR',
           packageType,
           status: 'completed',
           invoiceNumber: `INT-${Date.now()}`,
-          vatAmount: 0, // ভ্যাট অলরেডি টপ-আপের সময় কাটা হয়েছে
+          vatAmount: 0,
         },
       ],
       { session: dbSession }
