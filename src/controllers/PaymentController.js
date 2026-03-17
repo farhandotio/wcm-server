@@ -180,50 +180,89 @@ export const purchasePromotion = async (req, res) => {
     const listing = await Listing.findById(listingId).session(dbSession);
     const user = await User.findById(userId).session(dbSession);
 
-    // ১. এক্সপায়ারি ক্লিনআপ (যাতে পুরোনো ডাটা থাকলে রিসেট হয়ে যায়)
-    checkAndCleanupExpiry(listing);
-
-    // ২. ওভাররাইড প্রোটেকশন
-    if (packageType === 'boost' && listing.promotion.boost.isActive) {
-      throw new Error('Boost is already active. Wait for it to expire.');
-    }
-    if (packageType === 'ppc' && listing.promotion.ppc.isActive) {
-      throw new Error('PPC balance still exists. Use it first.');
-    }
-
     if (user.walletBalance < amountInEUR) throw new Error('Insufficient wallet balance.');
 
-    // ৩. ওয়ালেট কাটাকাটি
     user.walletBalance = Number((user.walletBalance - amountInEUR).toFixed(2));
     await user.save({ session: dbSession });
 
-    // ৪. নতুন প্যাকেজ সেট করা
     if (packageType === 'boost') {
+      // যদি আগে থেকেই বুস্ট একটিভ থাকে, তবে পুরনো এক্সপায়ারি ডেট থেকে দিন যোগ হবে
+      let currentExpiry = listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date()
+        ? new Date(listing.promotion.boost.expiresAt)
+        : new Date();
+
       listing.promotion.boost.isActive = true;
-      listing.promotion.boost.amountPaid = amountInEUR;
-      const expiry = new Date();
-      expiry.setDate(expiry.getDate() + parseInt(days));
-      listing.promotion.boost.expiresAt = expiry;
+      listing.promotion.boost.isPaused = false;
+      // টাকা এবং দিন যোগ হচ্ছে (ওভাররাইট নয়)
+      listing.promotion.boost.amountPaid = (listing.promotion.boost.amountPaid || 0) + amountInEUR;
+      listing.promotion.boost.durationDays = (listing.promotion.boost.durationDays || 0) + parseInt(days);
+      
+      currentExpiry.setDate(currentExpiry.getDate() + parseInt(days));
+      listing.promotion.boost.expiresAt = currentExpiry;
+
     } else if (packageType === 'ppc') {
       listing.promotion.ppc.isActive = true;
-      listing.promotion.ppc.ppcBalance = amountInEUR;
-      listing.promotion.ppc.amountPaid = amountInEUR;
-      listing.promotion.ppc.totalClicks = parseInt(totalClicks);
-      listing.promotion.ppc.costPerClick = Number((amountInEUR / totalClicks).toFixed(4));
+      listing.promotion.ppc.isPaused = false;
+      // ব্যালেন্স এবং ক্লিক যোগ হচ্ছে
+      listing.promotion.ppc.ppcBalance += amountInEUR;
+      listing.promotion.ppc.amountPaid += amountInEUR;
+      listing.promotion.ppc.totalClicks += parseInt(totalClicks);
+      
+      // CPC রিক্যালকুলেশন (পুরানো + নতুন মিলে এভারেজ)
+      listing.promotion.ppc.costPerClick = Number(
+        (listing.promotion.ppc.amountPaid / listing.promotion.ppc.totalClicks).toFixed(4)
+      );
     }
 
-    // ৫. লেভেল ক্যালকুলেশন (এটি আগের প্যাকেজ থাকলেও দুটোর কম্বাইন্ড লেভেল বের করবে)
+    // এখন লেভেল ক্যালকুলেট করলে সঠিক স্কোর আসবে
     applyPromotionLogic(listing);
     await listing.save({ session: dbSession });
 
-    // ট্রানজেকশন এবং অডিট লগ আপনার আগের মতই থাকবে...
+    const transaction = await Transaction.create(
+      [{
+          creator: userId,
+          listing: listingId,
+          amountPaid: amountInEUR,
+          amountInEUR: amountInEUR,
+          currency: 'EUR',
+          packageType: packageType,
+          status: 'completed',
+          invoiceNumber: `INT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+          vatAmount: 0,
+          fxRate: 1,
+          stripeSessionId: undefined // ডুপ্লিকেট এরর ফিক্স করতে undefined দিন
+      }],
+      { session: dbSession }
+    );
+
     await dbSession.commitTransaction();
-    res.status(200).json({ success: true, newBalance: user.walletBalance });
+    res.status(200).json({ success: true, transactionId: transaction[0]._id, newBalance: user.walletBalance });
   } catch (error) {
     await dbSession.abortTransaction();
     res.status(400).json({ success: false, message: error.message });
   } finally {
     dbSession.endSession();
+  }
+};
+
+export const togglePausePromotion = async (req, res) => {
+  const { listingId, packageType } = req.body;
+  try {
+    const listing = await Listing.findById(listingId);
+    if (packageType === 'boost') {
+      listing.promotion.boost.isPaused = !listing.promotion.boost.isPaused;
+    } else if (packageType === 'ppc') {
+      listing.promotion.ppc.isPaused = !listing.promotion.ppc.isPaused;
+    }
+    applyPromotionLogic(listing);
+    await listing.save();
+    res.status(200).json({
+      success: true,
+      isPaused:
+        packageType === 'boost' ? listing.promotion.boost.isPaused : listing.promotion.ppc.isPaused,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -399,3 +438,61 @@ export const generateInvoice = async (req, res) => {
     res.status(500).json({ message: 'Error generating PDF invoice' });
   }
 };
+
+// export const purchasePromotion = async (req, res) => {
+//   const { listingId, packageType, amountInEUR, days, totalClicks } = req.body;
+//   const userId = req.user._id;
+
+//   const dbSession = await mongoose.startSession();
+//   dbSession.startTransaction();
+
+//   try {
+//     const listing = await Listing.findById(listingId).session(dbSession);
+//     const user = await User.findById(userId).session(dbSession);
+
+//     // ১. এক্সপায়ারি ক্লিনআপ (যাতে পুরোনো ডাটা থাকলে রিসেট হয়ে যায়)
+//     checkAndCleanupExpiry(listing);
+
+//     // ২. ওভাররাইড প্রোটেকশন
+//     if (packageType === 'boost' && listing.promotion.boost.isActive) {
+//       throw new Error('Boost is already active. Wait for it to expire.');
+//     }
+//     if (packageType === 'ppc' && listing.promotion.ppc.isActive) {
+//       throw new Error('PPC balance still exists. Use it first.');
+//     }
+
+//     if (user.walletBalance < amountInEUR) throw new Error('Insufficient wallet balance.');
+
+//     // ৩. ওয়ালেট কাটাকাটি
+//     user.walletBalance = Number((user.walletBalance - amountInEUR).toFixed(2));
+//     await user.save({ session: dbSession });
+
+//     // ৪. নতুন প্যাকেজ সেট করা
+//     if (packageType === 'boost') {
+//       listing.promotion.boost.isActive = true;
+//       listing.promotion.boost.amountPaid = amountInEUR;
+//       const expiry = new Date();
+//       expiry.setDate(expiry.getDate() + parseInt(days));
+//       listing.promotion.boost.expiresAt = expiry;
+//     } else if (packageType === 'ppc') {
+//       listing.promotion.ppc.isActive = true;
+//       listing.promotion.ppc.ppcBalance = amountInEUR;
+//       listing.promotion.ppc.amountPaid = amountInEUR;
+//       listing.promotion.ppc.totalClicks = parseInt(totalClicks);
+//       listing.promotion.ppc.costPerClick = Number((amountInEUR / totalClicks).toFixed(4));
+//     }
+
+//     // ৫. লেভেল ক্যালকুলেশন (এটি আগের প্যাকেজ থাকলেও দুটোর কম্বাইন্ড লেভেল বের করবে)
+//     applyPromotionLogic(listing);
+//     await listing.save({ session: dbSession });
+
+//     // ট্রানজেকশন এবং অডিট লগ আপনার আগের মতই থাকবে...
+//     await dbSession.commitTransaction();
+//     res.status(200).json({ success: true, newBalance: user.walletBalance });
+//   } catch (error) {
+//     await dbSession.abortTransaction();
+//     res.status(400).json({ success: false, message: error.message });
+//   } finally {
+//     dbSession.endSession();
+//   }
+// };

@@ -5,6 +5,7 @@ import {
   generateInvoice,
   handleStripeWebhook,
   purchasePromotion,
+  togglePausePromotion,
 } from '../controllers/PaymentController.js';
 import { authMiddleware } from '../middlewares/auth.js';
 
@@ -19,5 +20,6 @@ router.post('/purchase-promotion', express.json(), authMiddleware, purchasePromo
 router.post('/cancel-promotion', express.json(), authMiddleware, cancelPromotion);
 
 router.get('/creator/invoice/:id', express.json(), authMiddleware, generateInvoice);
+router.post('/toggle-pause-promotion', express.json(), authMiddleware, togglePausePromotion);
 
 export default router;

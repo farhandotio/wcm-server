@@ -22,17 +22,16 @@ const listingSchema = new mongoose.Schema(
       level: { type: Number, default: 0 },
       boost: {
         isActive: { type: Boolean, default: false },
+        isPaused: { type: Boolean, default: false },
+        amountPaid: { type: Number, default: 0, set: roundToTwo },
+        durationDays: { type: Number, default: 0 },
         expiresAt: { type: Date },
-        amountPaid: {
-          type: Number,
-          default: 0,
-          set: roundToTwo,
-        },
       },
       ppc: {
         isActive: { type: Boolean, default: false },
         ppcBalance: { type: Number, default: 0, set: roundToTwo },
         costPerClick: { type: Number, default: 0.1, set: roundToTwo },
+        isPaused: { type: Boolean, default: false },
         totalClicks: { type: Number, default: 0 },
         executedClicks: { type: Number, default: 0 },
         amountPaid: { type: Number, default: 0, set: roundToTwo },
