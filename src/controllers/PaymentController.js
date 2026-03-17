@@ -187,19 +187,20 @@ export const purchasePromotion = async (req, res) => {
 
     if (packageType === 'boost') {
       // যদি আগে থেকেই বুস্ট একটিভ থাকে, তবে পুরনো এক্সপায়ারি ডেট থেকে দিন যোগ হবে
-      let currentExpiry = listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date()
-        ? new Date(listing.promotion.boost.expiresAt)
-        : new Date();
+      let currentExpiry =
+        listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date()
+          ? new Date(listing.promotion.boost.expiresAt)
+          : new Date();
 
       listing.promotion.boost.isActive = true;
       listing.promotion.boost.isPaused = false;
       // টাকা এবং দিন যোগ হচ্ছে (ওভাররাইট নয়)
       listing.promotion.boost.amountPaid = (listing.promotion.boost.amountPaid || 0) + amountInEUR;
-      listing.promotion.boost.durationDays = (listing.promotion.boost.durationDays || 0) + parseInt(days);
-      
+      listing.promotion.boost.durationDays =
+        (listing.promotion.boost.durationDays || 0) + parseInt(days);
+
       currentExpiry.setDate(currentExpiry.getDate() + parseInt(days));
       listing.promotion.boost.expiresAt = currentExpiry;
-
     } else if (packageType === 'ppc') {
       listing.promotion.ppc.isActive = true;
       listing.promotion.ppc.isPaused = false;
@@ -207,7 +208,7 @@ export const purchasePromotion = async (req, res) => {
       listing.promotion.ppc.ppcBalance += amountInEUR;
       listing.promotion.ppc.amountPaid += amountInEUR;
       listing.promotion.ppc.totalClicks += parseInt(totalClicks);
-      
+
       // CPC রিক্যালকুলেশন (পুরানো + নতুন মিলে এভারেজ)
       listing.promotion.ppc.costPerClick = Number(
         (listing.promotion.ppc.amountPaid / listing.promotion.ppc.totalClicks).toFixed(4)
@@ -219,7 +220,8 @@ export const purchasePromotion = async (req, res) => {
     await listing.save({ session: dbSession });
 
     const transaction = await Transaction.create(
-      [{
+      [
+        {
           creator: userId,
           listing: listingId,
           amountPaid: amountInEUR,
@@ -230,13 +232,16 @@ export const purchasePromotion = async (req, res) => {
           invoiceNumber: `INT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
           vatAmount: 0,
           fxRate: 1,
-          stripeSessionId: undefined // ডুপ্লিকেট এরর ফিক্স করতে undefined দিন
-      }],
+          stripeSessionId: undefined, // ডুপ্লিকেট এরর ফিক্স করতে undefined দিন
+        },
+      ],
       { session: dbSession }
     );
 
     await dbSession.commitTransaction();
-    res.status(200).json({ success: true, transactionId: transaction[0]._id, newBalance: user.walletBalance });
+    res
+      .status(200)
+      .json({ success: true, transactionId: transaction[0]._id, newBalance: user.walletBalance });
   } catch (error) {
     await dbSession.abortTransaction();
     res.status(400).json({ success: false, message: error.message });
@@ -277,32 +282,51 @@ export const cancelPromotion = async (req, res) => {
     const listing = await Listing.findById(listingId).session(dbSession);
     const user = await User.findById(userId).session(dbSession);
 
+    if (!listing) throw new Error('Listing not found');
+
     let refundAmount = 0;
     const now = new Date();
 
-    if (packageType === 'boost' && listing.promotion.boost.isActive) {
+    if (packageType === 'boost' && listing.promotion?.boost?.isActive) {
       const expiry = new Date(listing.promotion.boost.expiresAt);
       if (expiry > now) {
-        // ব্যবহৃত দিনের টাকা কেটে বাকিটা রিফান্ড (উদাহরণস্বরূপ ৩০ দিনের প্যাকেজ ধরলে)
-        const totalPaid = listing.promotion.boost.amountPaid;
+        // ব্যবহৃত দিনের টাকা কেটে বাকিটা রিফান্ড
+        const totalPaid = listing.promotion.boost.amountPaid || 0;
         const remainingTime = expiry.getTime() - now.getTime();
         const remainingDays = Math.max(0, remainingTime / (1000 * 60 * 60 * 24));
+        // ৩০ দিনের প্যাকেজ হিসাব করলে (আপনার লজিক অনুযায়ী)
         refundAmount = Number(((totalPaid / 30) * remainingDays).toFixed(2));
       }
-      resetBoost(listing); // বুস্ট ডাটা ক্লিয়ার
-    } else if (packageType === 'ppc' && listing.promotion.ppc.isActive) {
-      refundAmount = listing.promotion.ppc.ppcBalance; // পুরো কারেন্ট ব্যালেন্স রিফান্ড
-      resetPPC(listing); // পিপিছি ডাটা ক্লিয়ার
+      resetBoost(listing); // আপনার এক্সিস্টিং হেল্পার
+    } else if (packageType === 'ppc' && listing.promotion?.ppc?.isActive) {
+      refundAmount = listing.promotion.ppc.ppcBalance || 0;
+      resetPPC(listing); // আপনার এক্সিস্টিং হেল্পার
     }
 
-    // ওয়ালেটে রিফান্ড অ্যাড
+    // ওয়ালেটে রিফান্ড অ্যাড এবং ট্রানজেকশন রেকর্ড
     if (refundAmount > 0) {
       user.walletBalance = Number((user.walletBalance + refundAmount).toFixed(2));
       await user.save({ session: dbSession });
-      // রিফান্ড ট্রানজেকশন ক্রিয়েট...
+
+      // --- রিফান্ড ট্রানজেকশন ক্রিয়েট ---
+      await Transaction.create(
+        [
+          {
+            creator: userId,
+            listing: listingId,
+            amountPaid: refundAmount,
+            currency: 'EUR',
+            amountInEUR: refundAmount,
+            packageType: packageType === 'boost' ? 'refund_boost' : 'refund_ppc',
+            status: 'completed',
+            invoiceNumber: `REF-${Date.now()}-${listingId.toString().slice(-4)}`,
+          },
+        ],
+        { session: dbSession }
+      );
     }
 
-    // লেভেল আপডেট (যদি অন্য কোনো প্যাকেজ অন থাকে সেটার স্কোর থাকবে, না থাকলে ০ হবে)
+    // লেভেল এবং প্রমোশন লজিক আপডেট
     applyPromotionLogic(listing);
     await listing.save({ session: dbSession });
 
@@ -310,11 +334,61 @@ export const cancelPromotion = async (req, res) => {
     res.status(200).json({ success: true, refundAmount });
   } catch (error) {
     await dbSession.abortTransaction();
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   } finally {
     dbSession.endSession();
   }
 };
+
+// export const cancelPromotion = async (req, res) => {
+//   const { listingId, packageType } = req.body;
+//   const userId = req.user._id;
+
+//   const dbSession = await mongoose.startSession();
+//   dbSession.startTransaction();
+
+//   try {
+//     const listing = await Listing.findById(listingId).session(dbSession);
+//     const user = await User.findById(userId).session(dbSession);
+
+//     let refundAmount = 0;
+//     const now = new Date();
+
+//     if (packageType === 'boost' && listing.promotion.boost.isActive) {
+//       const expiry = new Date(listing.promotion.boost.expiresAt);
+//       if (expiry > now) {
+//         // ব্যবহৃত দিনের টাকা কেটে বাকিটা রিফান্ড (উদাহরণস্বরূপ ৩০ দিনের প্যাকেজ ধরলে)
+//         const totalPaid = listing.promotion.boost.amountPaid;
+//         const remainingTime = expiry.getTime() - now.getTime();
+//         const remainingDays = Math.max(0, remainingTime / (1000 * 60 * 60 * 24));
+//         refundAmount = Number(((totalPaid / 30) * remainingDays).toFixed(2));
+//       }
+//       resetBoost(listing); // বুস্ট ডাটা ক্লিয়ার
+//     } else if (packageType === 'ppc' && listing.promotion.ppc.isActive) {
+//       refundAmount = listing.promotion.ppc.ppcBalance; // পুরো কারেন্ট ব্যালেন্স রিফান্ড
+//       resetPPC(listing); // পিপিছি ডাটা ক্লিয়ার
+//     }
+
+//     // ওয়ালেটে রিফান্ড অ্যাড
+//     if (refundAmount > 0) {
+//       user.walletBalance = Number((user.walletBalance + refundAmount).toFixed(2));
+//       await user.save({ session: dbSession });
+//       // রিফান্ড ট্রানজেকশন ক্রিয়েট...
+//     }
+
+//     // লেভেল আপডেট (যদি অন্য কোনো প্যাকেজ অন থাকে সেটার স্কোর থাকবে, না থাকলে ০ হবে)
+//     applyPromotionLogic(listing);
+//     await listing.save({ session: dbSession });
+
+//     await dbSession.commitTransaction();
+//     res.status(200).json({ success: true, refundAmount });
+//   } catch (error) {
+//     await dbSession.abortTransaction();
+//     res.status(500).json({ message: error.message });
+//   } finally {
+//     dbSession.endSession();
+//   }
+// };
 
 export const generateInvoice = async (req, res) => {
   try {
