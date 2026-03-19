@@ -14,8 +14,13 @@ const listingSchema = new mongoose.Schema(
     tradition: { type: String, required: true },
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
     culturalTags: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Tag' }],
-    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected', 'blocked'],
+      default: 'pending',
+    },
     rejectionReason: { type: String, trim: true, default: '' },
+    additionalReason: { type: String, trim: true, default: '' },
     image: { type: String, required: true },
     favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     promotion: {
@@ -43,6 +48,7 @@ const listingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Indexes
 listingSchema.index({
   title: 'text',
   description: 'text',
@@ -50,11 +56,8 @@ listingSchema.index({
   region: 'text',
   tradition: 'text',
 });
-
 listingSchema.index({ isPromoted: 1 });
 listingSchema.index({ status: 1 });
-listingSchema.index({ 'promotion.boost.isActive': 1, 'promotion.boost.expiresAt': 1 });
-listingSchema.index({ 'promotion.ppc.isActive': 1, 'promotion.ppc.ppcBalance': 1 });
 
 const Listing = mongoose.model('Listing', listingSchema);
 export default Listing;

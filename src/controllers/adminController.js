@@ -354,11 +354,9 @@ export const manageListings = async (req, res) => {
     const now = new Date();
 
     const formattedListings = listings.map((item) => {
-      // PPC Balance calculation
       const ppcBalance = item.promotion?.ppc?.isActive ? item.promotion.ppc.ppcBalance || 0 : 0;
-
-      // Boost Remaining Time calculation
       let boostRemaining = 'No Active Boost';
+
       if (item.promotion?.boost?.isActive && item.promotion?.boost?.expiresAt) {
         const expiresAt = new Date(item.promotion.boost.expiresAt);
         if (expiresAt > now) {
@@ -386,7 +384,6 @@ export const manageListings = async (req, res) => {
 
     res.status(200).json(formattedListings);
   } catch (error) {
-    console.error('Admin Manage Listings Error:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -404,19 +401,39 @@ export const deleteListingByAdmin = async (req, res) => {
 export const updateListingStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, rejectionReason } = req.body;
+    const { status, reasonCode, additionalReason } = req.body;
 
     const listing = await Listing.findById(id);
-    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+    if (!listing) return res.status(404).json({ message: 'Asset not found' });
 
+    // Immutable Block Logic: যদি অলরেডি ব্লকড থাকে, তবে আর পরিবর্তন করা যাবে না
+    if (listing.status === 'blocked') {
+      return res.status(403).json({ message: 'Action Denied. This asset is permanently blocked.' });
+    }
+
+    // Status Update
     listing.status = status;
-    if (status === 'rejected') {
-      listing.rejectionReason = rejectionReason || 'Does not follow community guidelines.';
-      listing.isPromoted = false;
+
+    // যদি রিজেক্ট বা ব্লক করা হয়, তবে প্রোমোশন কিল করতে হবে
+    if (status === 'rejected' || status === 'blocked') {
+      listing.rejectionReason = reasonCode || '';
+      listing.additionalReason = additionalReason || '';
+
+      // Kill Promotion Logic
+      listing.promotion.isPromoted = false;
+      listing.promotion.level = 0;
+      listing.promotion.boost.isActive = false;
+      listing.promotion.ppc.isActive = false;
+    }
+
+    // যদি অ্যাপ্রুভ করা হয়, তবে রিজন ক্লিন করে দাও
+    if (status === 'approved') {
+      listing.rejectionReason = '';
+      listing.additionalReason = '';
     }
 
     await listing.save();
-    res.status(200).json({ success: true, message: `Listing ${status} successfully.` });
+    res.status(200).json({ success: true, message: `Status updated to ${status} successfully` });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -701,47 +718,59 @@ export const getPromotedListings = async (req, res) => {
   try {
     const {
       search = '',
-      type = 'all',
+      type = 'all', // 'all', 'boost', 'ppc', 'blocked'
       page = 1,
       limit = 10,
-      timeRange = 'all', // 'today', 'week', 'month'
+      timeRange = 'all',
     } = req.query;
 
     const now = new Date();
     let query = {};
 
-    // ১. টাইম রেঞ্জ ফিল্টার (createdAt বা promotion শুরু হওয়ার সময় অনুযায়ী)
+    // ১. টাইম রেঞ্জ ফিল্টার
     if (timeRange !== 'all') {
       let startDate = new Date();
       if (timeRange === 'today') startDate.setHours(0, 0, 0, 0);
       else if (timeRange === 'week') startDate.setDate(now.getDate() - 7);
       else if (timeRange === 'month') startDate.setMonth(now.getMonth() - 1);
 
-      query.updatedAt = { $gte: startDate }; // প্রোমোশন আপডেট হওয়ার সময়
+      query.updatedAt = { $gte: startDate };
     }
 
-    // ২. প্রোমোশন টাইপ ফিল্টার (Boost, PPC অথবা Both)
+    // ২. প্রোমোশন এবং স্ট্যাটাস লজিক
     const boostQuery = {
       'promotion.boost.isActive': true,
       'promotion.boost.expiresAt': { $gt: now },
+      status: 'approved', // বুস্টের জন্য অবশ্যই অ্যাপ্রুভড হতে হবে
     };
+
     const ppcQuery = {
       'promotion.ppc.isActive': true,
       'promotion.ppc.ppcBalance': { $gt: 0 },
+      status: 'approved', // PPC এর জন্য অবশ্যই অ্যাপ্রুভড হতে হবে
     };
 
     if (type === 'boost') {
       query = { ...query, ...boostQuery };
     } else if (type === 'ppc') {
       query = { ...query, ...ppcQuery };
+    } else if (type === 'blocked') {
+      // শুধুমাত্র ব্লকড লিস্টিং দেখাবে
+      query.status = 'blocked';
     } else {
-      // 'all' এর জন্য $or ব্যবহার করে যে কোনো একটি একটিভ থাকলেই হবে
+      // 'all' এর জন্য: হয় বুস্ট একটিভ, অথবা PPC একটিভ (এবং লিস্টিং ব্লকড নয়)
       query.$or = [boostQuery, ppcQuery];
     }
 
-    // ৩. সার্চ লজিক (Title)
+    // ৩. সার্চ লজিক (Title বা Creator Email/Username দিয়ে সার্চ করা যাবে)
     if (search) {
-      query.title = { $regex: search, $options: 'i' };
+      query.$and = query.$and || [];
+      query.$and.push({
+        $or: [
+          { title: { $regex: search, $options: 'i' } },
+          { 'creatorId.email': { $regex: search, $options: 'i' } },
+        ],
+      });
     }
 
     // ৪. ডাটা ফেচিং
@@ -754,9 +783,10 @@ export const getPromotedListings = async (req, res) => {
 
     const count = await Listing.countDocuments(query);
 
-    // ৫. ট্রানজেকশন ডাটা সিঙ্ক (Invoice ID ও Formatting)
+    // ৫. ডাটা ফরম্যাটিং এবং ট্রানজেকশন সিঙ্ক
     const formattedData = await Promise.all(
       listings.map(async (item) => {
+        // লিস্টিং এর শেষ সফল ট্রানজেকশন খুঁজে বের করা
         const lastTransaction = await Transaction.findOne({
           listing: item._id,
           status: 'completed',
@@ -770,6 +800,8 @@ export const getPromotedListings = async (req, res) => {
         return {
           _id: item._id,
           title: item.title,
+          status: item.status, // Frontend-এ ব্যাজ দেখানোর জন্য
+          rejectionReason: item.rejectionReason || '', // ব্লক হওয়ার কারণ
           creatorName: `${item.creatorId?.firstName || 'Unknown'} ${item.creatorId?.lastName || ''}`,
           creatorEmail: item.creatorId?.email || 'N/A',
           boostStatus: isBoost
@@ -777,7 +809,16 @@ export const getPromotedListings = async (req, res) => {
             : 'Inactive',
           ppcBalance: `€${(item.promotion.ppc.ppcBalance || 0).toFixed(2)}`,
           promotionLevel: item.promotion.level,
-          activeType: isBoost && isPpc ? 'Both' : isBoost ? 'Boost' : isPpc ? 'PPC' : 'None',
+          activeType:
+            item.status === 'blocked'
+              ? 'Blocked'
+              : isBoost && isPpc
+                ? 'Both'
+                : isBoost
+                  ? 'Boost'
+                  : isPpc
+                    ? 'PPC'
+                    : 'None',
           invoiceId: lastTransaction ? lastTransaction._id : null,
           invoiceNo: lastTransaction ? lastTransaction.invoiceNumber : 'N/A',
         };
@@ -796,87 +837,6 @@ export const getPromotedListings = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// export const getPromotedListings = async (req, res) => {
-//   try {
-//     const { search = '', type = 'all', page = 1, limit = 10 } = req.query;
-//     const now = new Date();
-
-//     // ফিল্টার কুয়েরি তৈরি
-//     let query = {
-//       $or: [
-//         { 'promotion.boost.isActive': true, 'promotion.boost.expiresAt': { $gt: now } },
-//         { 'promotion.ppc.isActive': true, 'promotion.ppc.ppcBalance': { $gt: 0 } },
-//       ],
-//     };
-
-//     // সার্চ লজিক (Title বা Creator Email দিয়ে)
-//     if (search) {
-//       query.$and = [
-//         {
-//           $or: [
-//             { title: { $regex: search, $options: 'i' } },
-//             { 'creatorId.email': { $regex: search, $options: 'i' } },
-//           ],
-//         },
-//       ];
-//     }
-
-//     // টাইপ ফিল্টার (Boost নাকি PPC)
-//     if (type === 'boost') {
-//       query = { 'promotion.boost.isActive': true, 'promotion.boost.expiresAt': { $gt: now } };
-//     } else if (type === 'ppc') {
-//       query = { 'promotion.ppc.isActive': true, 'promotion.ppc.ppcBalance': { $gt: 0 } };
-//     }
-
-//     const listings = await Listing.find(query)
-//       .populate('creatorId', 'firstName lastName email username')
-//       .sort({ 'promotion.level': -1 }) // সবচেয়ে বেশি টাকা খরচ করা লিস্টিং উপরে থাকবে
-//       .limit(limit * 1)
-//       .skip((page - 1) * limit)
-//       .lean();
-
-//     const count = await Listing.countDocuments(query);
-
-//     // প্রতিটি লিস্টিংয়ের জন্য লেটেস্ট ট্রানজেকশন/ইনভয়েস আইডি খুঁজে বের করা
-//     const formattedData = await Promise.all(
-//       listings.map(async (item) => {
-//         // এই লিস্টিংয়ের জন্য শেষ সফল পেমেন্টটি খুঁজে বের করা
-//         const lastTransaction = await Transaction.findOne({
-//           listing: item._id,
-//           status: 'completed',
-//         })
-//           .sort({ createdAt: -1 })
-//           .select('_id invoiceNumber');
-
-//         return {
-//           _id: item._id,
-//           title: item.title,
-//           creatorName: `${item.creatorId?.firstName} ${item.creatorId?.lastName}`,
-//           creatorEmail: item.creatorId?.email,
-//           boostStatus:
-//             item.promotion.boost.isActive && item.promotion.boost.expiresAt > now
-//               ? `Expires: ${new Date(item.promotion.boost.expiresAt).toLocaleDateString()}`
-//               : 'Inactive',
-//           ppcBalance: `€${item.promotion.ppc.ppcBalance.toFixed(2)}`,
-//           promotionLevel: item.promotion.level,
-//           invoiceId: lastTransaction ? lastTransaction._id : null, // ইনভয়েস ডাউনলোডের জন্য আইডি
-//           invoiceNo: lastTransaction ? lastTransaction.invoiceNumber : 'N/A',
-//         };
-//       })
-//     );
-
-//     res.status(200).json({
-//       success: true,
-//       listings: formattedData,
-//       totalCount: count,
-//       totalPages: Math.ceil(count / limit),
-//       currentPage: Number(page),
-//     });
-//   } catch (error) {
-//     res.status(500).json({ success: false, message: error.message });
-//   }
-// };
 
 export const getAdminStats = async (req, res) => {
   try {
