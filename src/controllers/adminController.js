@@ -9,12 +9,42 @@ import Transaction from '../models/Transaction.js';
 import Analytics from '../models/Analytics.js';
 import { SystemSettings } from '../models/SystemSettings.js';
 
+// export const createTag = async (req, res) => {
+//   try {
+//     const { title } = req.body;
+
+//     if (!req.file) {
+//       return res.status(400).json({ message: 'Please upload a tag icon/image' });
+//     }
+
+//     const imageUrl = req.file.path;
+
+//     const newTag = await Tag.create({
+//       title,
+//       image: imageUrl,
+//     });
+
+//     res.status(201).json(newTag);
+//   } catch (error) {
+//     if (error.code === 11000) {
+//       return res.status(400).json({ message: 'Tag title already exists' });
+//     }
+
+//     console.error('Tag Creation Error:', error);
+//     res.status(500).json({ message: error.message });
+//   }
+// };
+
 export const createTag = async (req, res) => {
   try {
-    const { title } = req.body;
+    const { title, categoryId } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ message: 'Please upload a tag icon/image' });
+    }
+
+    if (!categoryId) {
+      return res.status(400).json({ message: 'Category ID is required to link this tag' });
     }
 
     const imageUrl = req.file.path;
@@ -22,15 +52,25 @@ export const createTag = async (req, res) => {
     const newTag = await Tag.create({
       title,
       image: imageUrl,
+      category: categoryId, 
     });
 
     res.status(201).json(newTag);
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(400).json({ message: 'Tag title already exists' });
+      return res.status(400).json({ message: 'This tag already exists in this category' });
     }
+    res.status(500).json({ message: error.message });
+  }
+};
 
-    console.error('Tag Creation Error:', error);
+// new 
+export const getTagsByCategory = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const tags = await Tag.find({ category: categoryId });
+    res.status(200).json(tags);
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };

@@ -462,3 +462,4 @@ export const generateInvoice = async (req, res) => {
     res.status(500).json({ message: 'Error generating PDF invoice' });
   }
 };
+
