@@ -404,3 +404,89 @@ export const getFamousCreators = async (req, res) => {
     res.status(500).json({ message: 'Internal Server Error' });
   }
 };
+
+export const getTopCreatorsWithDropdown = async (req, res) => {
+  try {
+    const { search = '', country = '' } = req.query;
+
+    let userQuery = {
+      role: 'creator',
+      status: 'active',
+    };
+
+    // 🔎 Search & Country filters
+    if (search) {
+      userQuery.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+      ];
+    }
+    if (country) {
+      userQuery['profile.country'] = { $regex: country, $options: 'i' };
+    }
+
+    const aggregatePipeline = [
+      { $match: userQuery },
+      {
+        $lookup: {
+          from: 'listings',
+          localField: '_id',
+          foreignField: 'creatorId',
+          as: 'allListings',
+        },
+      },
+      {
+        $project: {
+          firstName: 1,
+          lastName: 1,
+          username: 1,
+          profile: 1,
+          // ১. টপ ৩০ নির্ধারণের জন্য spending power ক্যালকুলেশন (Boost + PPC)
+          spendingPower: {
+            $sum: [
+              { $sum: '$allListings.promotion.boost.amountPaid' },
+              { $sum: '$allListings.promotion.ppc.amountPaid' },
+            ],
+          },
+          // ২. শুধুমাত্র এপ্রুভড লিস্টিং এর সংখ্যা
+          approvedListingsCount: {
+            $size: {
+              $filter: {
+                input: '$allListings',
+                as: 'l',
+                cond: { $eq: ['$$l.status', 'approved'] },
+              },
+            },
+          },
+        },
+      },
+      // যাদের অন্তত ১টি এপ্রুভড লিস্টিং আছে
+      { $match: { approvedListingsCount: { $gt: 0 } } },
+      // ৩. Spending Power অনুযায়ী সর্টিং (বেশি টাকা খরচ করা ক্রিয়েটররা উপরে থাকবে)
+      { $sort: { spendingPower: -1, approvedListingsCount: -1 } },
+    ];
+
+    const allCreators = await User.aggregate(aggregatePipeline);
+
+    // ৪. লজিক: প্রথম ৩০ জন "Top 30", বাকিরা "Dropdown List"
+    const top30Creators = allCreators.slice(0, 30);
+    const restCreators = allCreators.slice(30).map((c) => ({
+      _id: c._id,
+      fullName: `${c.firstName} ${c.lastName}`,
+      username: c.username,
+    }));
+
+    res.status(200).json({
+      success: true,
+      message: 'Our Top 30 Creators',
+      data: {
+        top30: top30Creators,
+        dropdownList: restCreators, // বাকিরা ড্রপডাউনের জন্য
+        totalCount: allCreators.length,
+      },
+    });
+  } catch (error) {
+    console.error('Top Creators Error:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+};
