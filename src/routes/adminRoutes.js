@@ -21,6 +21,7 @@ import {
   updatePpcBalanceManual,
   getPromotedListings,
   getTagsByCategory,
+  getAllCategories,
 } from '../controllers/adminController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 import upload from '../config/multer.js';
@@ -31,6 +32,7 @@ router.use(authMiddleware);
 router.use(authorizeRoles('admin'));
 
 router.get('/tags/by-category/:categoryId', getTagsByCategory);
+router.get('/categories', getAllCategories);
 router.get('/stats', getAdminStats);
 router.get('/transactions', getAllTransactions);
 router.get('/export-transactions', exportTransactionsExcel);

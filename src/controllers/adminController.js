@@ -64,6 +64,16 @@ export const createTag = async (req, res) => {
   }
 };
 
+// new
+export const getAllCategories = async (req, res) => {
+  try {
+    const categories = await Category.find().sort({ order: 1 });
+    res.status(200).json(categories);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // new 
 export const getTagsByCategory = async (req, res) => {
   try {
