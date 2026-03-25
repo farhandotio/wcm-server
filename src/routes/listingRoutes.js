@@ -14,11 +14,15 @@ import {
   cancelPromotion,
   getMyFavorites,
 } from '../controllers/listingController.js';
+import {
+  getTagsByCategory,
+} from '../controllers/adminController.js';
 import { authMiddleware, authorizeRoles, optionalAuth } from '../middlewares/auth.js';
 
 const router = express.Router();
 
 router.get('/public', optionalAuth, getPublicListings);
+router.get('/tags/by-category/:categoryId', getTagsByCategory);
 router.get('/meta-data', getCategoriesAndTags);
 
 router.get('/count/:creatorId', getCreatorListingCount);
