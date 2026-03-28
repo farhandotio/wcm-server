@@ -264,7 +264,7 @@ export const updateListing = async (req, res) => {
       listing.culturalTags = tags;
     }
 
-    if (listing.status !== 'approved') {
+    if (listing.status !== 'approved' && listing.status !== 'blocked') {
       listing.status = 'pending';
       listing.rejectionReason = '';
     }
