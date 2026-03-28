@@ -9,49 +9,16 @@ import Transaction from '../models/Transaction.js';
 import Analytics from '../models/Analytics.js';
 import { SystemSettings } from '../models/SystemSettings.js';
 
-// export const createTag = async (req, res) => {
-//   try {
-//     const { title } = req.body;
-
-//     if (!req.file) {
-//       return res.status(400).json({ message: 'Please upload a tag icon/image' });
-//     }
-
-//     const imageUrl = req.file.path;
-
-//     const newTag = await Tag.create({
-//       title,
-//       image: imageUrl,
-//     });
-
-//     res.status(201).json(newTag);
-//   } catch (error) {
-//     if (error.code === 11000) {
-//       return res.status(400).json({ message: 'Tag title already exists' });
-//     }
-
-//     console.error('Tag Creation Error:', error);
-//     res.status(500).json({ message: error.message });
-//   }
-// };
-
 export const createTag = async (req, res) => {
   try {
     const { title, categoryId } = req.body;
-
-    if (!req.file) {
-      return res.status(400).json({ message: 'Please upload a tag icon/image' });
-    }
 
     if (!categoryId) {
       return res.status(400).json({ message: 'Category ID is required to link this tag' });
     }
 
-    const imageUrl = req.file.path;
-
     const newTag = await Tag.create({
       title,
-      image: imageUrl,
       category: categoryId,
     });
 
@@ -136,21 +103,6 @@ export const updateTag = async (req, res) => {
     if (!tag) return res.status(404).json({ message: 'Tag not found' });
 
     let updateData = { title: req.body.title };
-
-    if (req.file) {
-      if (tag.image && !tag.image.startsWith('http')) {
-        const oldImagePath = path.join(process.cwd(), tag.image);
-        if (fs.existsSync(oldImagePath)) {
-          try {
-            fs.unlinkSync(oldImagePath);
-          } catch (err) {
-            console.error('Old local tag image delete failed:', err);
-          }
-        }
-      }
-
-      updateData.image = req.file.path;
-    }
 
     const updatedTag = await Tag.findByIdAndUpdate(
       id,

@@ -45,14 +45,14 @@ router.get('/creator-requests', getCreatorRequests);
 router.get('/export-users', exportUsersExcel);
 
 router.post('/categories', createCategory);
-router.post('/tags', upload.single('image'), createTag);
+router.post('/tags', createTag);
 
 router.put('/categories/reorder', updateCategoryOrder);
 
 router.put('/categories/:id', updateCategory);
 router.delete('/categories/:id', deleteCategory);
 
-router.put('/tags/:id', upload.single('image'), updateTag);
+router.put('/tags/:id', updateTag);
 router.delete('/tags/:id', deleteTag);
 
 router.put('/approve-creator/:userId', approveCreator);
