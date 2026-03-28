@@ -31,8 +31,8 @@ app.use('/api/payments', paymentRoutes);
 app.use(express.json());
 
 app.use('/api/users', userRoutes);
-app.use('/api/listings', listingRoutes);
 app.use('/api/creator', creatorRoutes);
+app.use('/api/listings', listingRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/audit', auditRoutes);
 

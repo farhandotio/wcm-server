@@ -4,7 +4,7 @@ import path from 'path';
 import Category from '../models/Category.js';
 import Tag from '../models/Tag.js';
 import User from '../models/User.js';
-import mongoose from 'mongoose'
+import mongoose from 'mongoose';
 import { calculateListingLevel } from '../utils/levelCalculator.js';
 import Analytics from '../models/Analytics.js';
 import InteractionLog from '../models/InteractionLog.js';
@@ -883,5 +883,21 @@ export const cancelPromotion = async (req, res) => {
     dbSession.endSession();
     console.error('Promotion Cancel Error:', error);
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const getModerationReasons = async (req, res) => {
+  try {
+    const reasonCodes = Listing.schema.path('rejectionReason').enumValues;
+
+    // খালি ভ্যালু থাকলে সেগুলো ফিল্টার করা
+    const filteredReasons = reasonCodes.filter((reason) => reason && reason !== '');
+
+    res.status(200).json({
+      success: true,
+      reasons: filteredReasons,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Model or Enum path not found' });
   }
 };

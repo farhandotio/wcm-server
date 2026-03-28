@@ -12,6 +12,7 @@ import {
   getPublicProfile,
   getFamousCreators,
   getTopCreatorsWithDropdown,
+  getModerationReasons,
 } from '../controllers/userController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
@@ -22,6 +23,7 @@ router.post('/login', loginUser);
 router.post('/logout', logoutUser);
 router.delete('/delete-account', authMiddleware, deleteUserAccount);
 
+router.get('/moderation-reasons', getModerationReasons);
 router.get('/famous-creators', getFamousCreators);
 router.get('/top-creators-dropdown', getTopCreatorsWithDropdown);
 router.get('/me', authMiddleware, getMyProfile);

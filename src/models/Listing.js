@@ -2,6 +2,19 @@ import mongoose from 'mongoose';
 
 const roundToTwo = (v) => Math.round(v * 100) / 100;
 
+const REASON_CODES = [
+  'ILLEGAL_CONTENT',
+  'HATE_OR_EXTREMISM',
+  'CULTURAL_MISREPRESENTATION',
+  'COPYRIGHT_ISSUE',
+  'COUNTERFEIT_OR_FRAUD',
+  'QUALITY_ISSUE',
+  'MISLEADING_LINK',
+  'SPAM',
+  'ADMIN_DECISION',
+  'NOT_RELEVANT_TO_OUR_BUSINESS_MODEL',
+];
+
 const listingSchema = new mongoose.Schema(
   {
     creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -19,7 +32,14 @@ const listingSchema = new mongoose.Schema(
       enum: ['pending', 'approved', 'rejected', 'blocked'],
       default: 'pending',
     },
-    rejectionReason: { type: String, trim: true, default: '' },
+    rejectionReason: {
+      type: String,
+      enum: {
+        values: [...REASON_CODES, ''], 
+        message: '{VALUE} is not a valid reason code',
+      },
+      default: '',
+    },
     additionalReason: { type: String, trim: true, default: '' },
     image: { type: String, required: true },
     favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
@@ -49,6 +69,7 @@ const listingSchema = new mongoose.Schema(
 );
 
 // Indexes
+listingSchema.index({ status: 1, rejectionReason: 1 });
 listingSchema.index({
   title: 'text',
   description: 'text',

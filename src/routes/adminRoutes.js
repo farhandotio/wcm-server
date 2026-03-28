@@ -28,7 +28,6 @@ import upload from '../config/multer.js';
 
 const router = express.Router();
 
-
 router.get('/tags/by-category/:categoryId', getTagsByCategory);
 router.get('/categories', getAllCategories);
 

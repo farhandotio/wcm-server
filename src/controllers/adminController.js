@@ -292,38 +292,82 @@ export const approveCreator = async (req, res) => {
   }
 };
 
+// export const rejectCreator = async (req, res) => {
+//   try {
+//     const { userId } = req.params;
+//     const { reason, statusType } = req.body;
+
+//     const user = await User.findByIdAndUpdate(
+//       userId,
+//       {
+//         $set: {
+//           'creatorRequest.isApplied': false,
+
+//           'creatorRequest.status': statusType || 'rejected',
+
+//           'creatorRequest.rejectionReason': reason || 'No specific reason provided.',
+
+//           'creatorRequest.adminComment':
+//             statusType === 'needs_review'
+//               ? 'Action required: Please update your profile as requested.'
+//               : 'Final Decision: Application Rejected.',
+//         },
+//       },
+//       { new: true }
+//     ).select('-password');
+
+//     if (!user) return res.status(404).json({ message: 'User not found' });
+
+//     res.status(200).json({
+//       message: `Creator request processed as ${statusType}`,
+//       user,
+//     });
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
+
 export const rejectCreator = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { reason, statusType } = req.body;
+    // ফ্রন্টএন্ড থেকে আসা ডাইনামিক ডাটা
+    const { reasonCode, reason, statusType } = req.body;
 
     const user = await User.findByIdAndUpdate(
       userId,
       {
         $set: {
+          // রিকোয়েস্ট প্রসেস হয়ে গেলে isApplied ফলস করে দিচ্ছি
           'creatorRequest.isApplied': false,
 
+          // statusType: 'rejected' অথবা 'needs_review'
           'creatorRequest.status': statusType || 'rejected',
 
-          'creatorRequest.rejectionReason': reason || 'No specific reason provided.',
+          // মডেলে Enum ভ্যালু হিসেবে যাচ্ছে (যেমন: 'QUALITY_ISSUE')
+          'creatorRequest.rejectionReason': reasonCode || '',
 
+          // বিস্তারিত টেক্সট যা টেক্সট এরিয়া থেকে আসছে
+          'creatorRequest.additionalReason': reason || '',
+
+          // অটোমেটিক অ্যাডমিন কমেন্ট
           'creatorRequest.adminComment':
             statusType === 'needs_review'
-              ? 'Action required: Please update your profile as requested.'
-              : 'Final Decision: Application Rejected.',
+              ? 'Action Required: Protocol flags detected. Update your profile as requested.'
+              : 'Protocol Denial: Application rejected by the admin team.',
         },
       },
-      { new: true }
+      { new: true, runValidators: true } // Validators true রাখা জরুরি কারণ rejectionReason একটি Enum
     ).select('-password');
 
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ success: false, message: 'Node not found.' });
 
     res.status(200).json({
-      message: `Creator request processed as ${statusType}`,
+      success: true,
+      message: `Creator request finalized as ${statusType}`,
       user,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -400,44 +444,97 @@ export const deleteListingByAdmin = async (req, res) => {
   }
 };
 
+// export const updateListingStatus = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { status, reasonCode, additionalReason } = req.body;
+
+//     const listing = await Listing.findById(id);
+//     if (!listing) return res.status(404).json({ message: 'Asset not found' });
+
+//     // Immutable Block Logic: যদি অলরেডি ব্লকড থাকে, তবে আর পরিবর্তন করা যাবে না
+//     if (listing.status === 'blocked') {
+//       return res.status(403).json({ message: 'Action Denied. This asset is permanently blocked.' });
+//     }
+
+//     // Status Update
+//     listing.status = status;
+
+//     // যদি রিজেক্ট বা ব্লক করা হয়, তবে প্রোমোশন কিল করতে হবে
+//     if (status === 'rejected' || status === 'blocked') {
+//       listing.rejectionReason = reasonCode || '';
+//       listing.additionalReason = additionalReason || '';
+
+//       // Kill Promotion Logic
+//       listing.promotion.isPromoted = false;
+//       listing.promotion.level = 0;
+//       listing.promotion.boost.isActive = false;
+//       listing.promotion.ppc.isActive = false;
+//     }
+
+//     // যদি অ্যাপ্রুভ করা হয়, তবে রিজন ক্লিন করে দাও
+//     if (status === 'approved') {
+//       listing.rejectionReason = '';
+//       listing.additionalReason = '';
+//     }
+
+//     await listing.save();
+//     res.status(200).json({ success: true, message: `Status updated to ${status} successfully` });
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
+
 export const updateListingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, reasonCode, additionalReason } = req.body;
 
     const listing = await Listing.findById(id);
-    if (!listing) return res.status(404).json({ message: 'Asset not found' });
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    // Immutable Block Logic: যদি অলরেডি ব্লকড থাকে, তবে আর পরিবর্তন করা যাবে না
+    // ১. Immutable Block Logic
     if (listing.status === 'blocked') {
       return res.status(403).json({ message: 'Action Denied. This asset is permanently blocked.' });
     }
 
-    // Status Update
+    // ২. Validation: রিজেক্ট বা ব্লক করলে reasonCode ম্যান্ডেটরি
+    if ((status === 'rejected' || status === 'blocked') && !reasonCode) {
+      return res
+        .status(400)
+        .json({ message: 'A specific reason code must be selected for this action.' });
+    }
+
+    // ৩. Status Update
     listing.status = status;
 
-    // যদি রিজেক্ট বা ব্লক করা হয়, তবে প্রোমোশন কিল করতে হবে
+    // ৪. Moderation Action Logic
     if (status === 'rejected' || status === 'blocked') {
-      listing.rejectionReason = reasonCode || '';
+      listing.rejectionReason = reasonCode;
       listing.additionalReason = additionalReason || '';
 
-      // Kill Promotion Logic
+      // Kill Promotion (টাকা দিয়ে প্রোমোট করলেও রুলস ব্রেক করলে সুবিধা বন্ধ)
       listing.promotion.isPromoted = false;
       listing.promotion.level = 0;
       listing.promotion.boost.isActive = false;
       listing.promotion.ppc.isActive = false;
     }
 
-    // যদি অ্যাপ্রুভ করা হয়, তবে রিজন ক্লিন করে দাও
+    // ৫. Approval Logic (রিজন ক্লিন করা)
     if (status === 'approved') {
       listing.rejectionReason = '';
       listing.additionalReason = '';
     }
 
     await listing.save();
-    res.status(200).json({ success: true, message: `Status updated to ${status} successfully` });
+
+    res.status(200).json({
+      success: true,
+      message: `Listing ${status} successfully`,
+      data: { status, reasonCode },
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 

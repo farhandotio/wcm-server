@@ -2,7 +2,7 @@ import User from '../models/User.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import Listing from '../models/Listing.js';
-import { validateVatWithVIES } from '../utils/vatHelper.js'; 
+import { validateVatWithVIES } from '../utils/vatHelper.js';
 
 // ১. Register
 export const registerUser = async (req, res) => {
@@ -631,5 +631,21 @@ export const getTopCreatorsWithDropdown = async (req, res) => {
   } catch (error) {
     console.error('Top Creators Error:', error);
     res.status(500).json({ message: 'Internal Server Error' });
+  }
+};
+
+export const getModerationReasons = async (req, res) => {
+  try {
+    const reasonCodes = User.schema.path('creatorRequest.rejectionReason').enumValues;
+
+    // empty string ফিল্টার করে ফ্রন্টএন্ডে ক্লিন ডাটা পাঠানো
+    const filteredReasons = reasonCodes.filter((r) => r !== '');
+
+    res.status(200).json({
+      success: true,
+      reasons: filteredReasons,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };
