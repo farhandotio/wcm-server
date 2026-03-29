@@ -1080,14 +1080,53 @@ export const getAdminStats = async (req, res) => {
 export const getUserById = async (req, res) => {
   try {
     const { id } = req.params;
-    const user = await User.findById(id).select('-password').lean();
+
+    // ১. ইউজারের মেইন ডাটা এবং ক্যাটাগরি পপুলেট করা
+    const user = await User.findById(id)
+      .select('-password') // সিকিউরিটির জন্য পাসওয়ার্ড বাদ
+      .populate('profile.category', 'title') // প্রোফাইলের ক্যাটাগরি নাম আনা
+      .lean();
 
     if (!user) {
-      return res.status(404).json({ success: false, message: 'Entity not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'ENTITY_NOT_FOUND: Protocol identification failed.',
+      });
     }
 
-    res.status(200).json({ success: true, user });
+    // ২. ইউজারের লিস্টিং মেট্রিক্স আনা (অ্যাডমিন প্যানেলে দেখানোর জন্য)
+    // এখানে আমরা দেখবো ইউজারের কয়টি লিস্টিং আছে এবং কয়টি প্রোমোটেড
+    const listings = await Listing.find({ creatorId: id }).lean();
+
+    const stats = {
+      totalListings: listings.length,
+      activeListings: listings.filter((l) => l.status === 'approved').length,
+      pendingListings: listings.filter((l) => l.status === 'pending').length,
+      promotedListings: listings.filter((l) => l.promotion?.isPromoted).length,
+      totalViews: listings.reduce((acc, curr) => acc + (curr.views || 0), 0),
+    };
+
+    // ৩. ইউজারের ফুল প্রোফাইল কমপ্লিটনেস চেক (অপশনাল কিন্তু অ্যাডমিনের জন্য হেল্পফুল)
+    const profileCompleteness = {
+      hasVat: !!user.profile?.vatNumber,
+      isVerified: user.status === 'active',
+      hasBio: !!user.profile?.bio,
+      hasImage: !!user.profile?.profileImage,
+    };
+
+    res.status(200).json({
+      success: true,
+      user: {
+        ...user,
+        metrics: stats, // এই ডাটাগুলো আপনার MetricCard এ বসবে
+        compliance: profileCompleteness,
+      },
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('CRITICAL_AUTH_ERROR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'CORE_RETRIEVAL_FAILURE: ' + error.message,
+    });
   }
 };
