@@ -137,7 +137,6 @@ export const getCreatorDashboardStats = async (req, res) => {
     const now = new Date();
     const isForceRefresh = req.query.refresh === 'true';
 
-    // ১. ইউজার ডাটা চেক (Cache Logic)
     const user = await User.findById(creatorId).select('dashboardStats walletBalance');
     const lastUpdate = user?.dashboardStats?.lastUpdated
       ? new Date(user.dashboardStats.lastUpdated)
@@ -147,21 +146,18 @@ export const getCreatorDashboardStats = async (req, res) => {
     if (!isForceRefresh && !isCacheExpired && user?.dashboardStats?.data) {
       return res.status(200).json({
         success: true,
-        stats: user.dashboardStats.data.stats,
-        chartData: user.dashboardStats.data.chartData,
+        ...user.dashboardStats.data,
         walletBalance: user.walletBalance.toFixed(2),
         isCached: true,
         lastUpdated: lastUpdate,
       });
     }
 
-    // ২. টাইম ফ্রেম সেটআপ
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setHours(0, 0, 0, 0);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    // ৩. প্যারালাল ডাটা ফেচিং
     const [listings, transactions, allAnalytics] = await Promise.all([
       Listing.find({ creatorId }),
       Transaction.find({
@@ -170,13 +166,11 @@ export const getCreatorDashboardStats = async (req, res) => {
         createdAt: { $gte: startOfMonth },
         packageType: { $in: ['boost', 'ppc', 'refund_boost', 'refund_ppc'] },
       }),
-      Analytics.find({
-        creatorId,
-        date: { $gte: sevenDaysAgo }, // চার্টের জন্য গত ৭ দিনের ডাটা
-      }).lean(),
+      // সব অ্যানালিটিক্স ডেটা নেওয়া হচ্ছে
+      Analytics.find({ creatorId }).sort({ date: 1 }).lean(),
     ]);
 
-    // ৪. স্পেন্ড ক্যালকুলেশন (Spend Logic - Net value calculation)
+    // ১. স্পেন্ড ক্যালকুলেশন
     const totalMonthlySpend = transactions.reduce((acc, curr) => {
       const amount = Number(curr.amountPaid) || 0;
       if (['boost', 'ppc'].includes(curr.packageType)) return acc + amount;
@@ -184,46 +178,42 @@ export const getCreatorDashboardStats = async (req, res) => {
       return acc;
     }, 0);
 
-    // ৫. অ্যানালিটিক্স এবং লাইফটাইম ডাটা
-    // নোট: lifetime ডাটা সব Analytics এন্ট্রি থেকে আসবে (যদি ফিল্টার না থাকতো)
-    // তবে চার্টের জন্য আমরা লুপ চালাবো
-    const lifetimeViews = listings.reduce((acc, curr) => acc + (curr.views || 0), 0);
-    // যেহেতু আপনার Analytics মডেলে clicks আছে, আমরা সেখান থেকে টোটাল ক্লিক বের করবো
-    const totalClicksCount = listings.reduce(
-      (acc, curr) => acc + (curr.promotion?.ppc?.executedClicks || 0),
-      0
-    );
+    // ২. লাইফটাইম স্ট্যাটস (এটি চার্টের সাথে সিঙ্ক রাখতে সরাসরি অ্যানালিটিক্স থেকে নেওয়া হচ্ছে)
+    const lifetimeViews = allAnalytics.reduce((acc, curr) => acc + (curr.views || 0), 0);
+    const lifetimeClicks = allAnalytics.reduce((acc, curr) => acc + (curr.clicks || 0), 0);
 
-    // ৬. চার্ট ডাটা জেনারেশন (Last 7 Days)
+    // ৩. চার্ট ডেটা জেনারেশন (Fix: Date matching logic)
     const chartData = [];
     for (let i = 0; i < 7; i++) {
       const targetDate = new Date(sevenDaysAgo);
       targetDate.setDate(targetDate.getDate() + i);
-      const dateStr = targetDate.toISOString().split('T')[0];
 
-      const dayData = allAnalytics.filter(
-        (a) => new Date(a.date).toISOString().split('T')[0] === dateStr
-      );
+      // লোকাল ডেট স্ট্রিং (YYYY-MM-DD) বের করা যা ডাটাবেসের ডেটের সাথে মিলবে
+      const dStr = targetDate.toLocaleDateString('en-CA'); // Outputs YYYY-MM-DD accurately
+
+      const dayData = allAnalytics.filter((a) => {
+        const aDate = new Date(a.date).toLocaleDateString('en-CA');
+        return aDate === dStr;
+      });
 
       chartData.push({
         name: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
+        fullDate: dStr, // Debugging এর জন্য
         views: dayData.reduce((sum, d) => sum + (d.views || 0), 0),
         clicks: dayData.reduce((sum, d) => sum + (d.clicks || 0), 0),
       });
     }
 
-    // ৭. মেম্বারশিপ এবং স্ট্যাটাস কাউন্ট
     const stats = {
       totalViews: lifetimeViews,
+      totalClicks: lifetimeClicks,
       totalMonthlySpend: Math.max(0, totalMonthlySpend).toFixed(2),
-      totalClicks: totalClicksCount,
-      totalListings: listings.length,
-      // Active Nodes: যারা বর্তমানে লাইভ প্রমোশনে আছে
       totalActivePromoted: listings.filter(
         (l) =>
           (l.promotion?.boost?.isActive && new Date(l.promotion.boost.expiresAt) > now) ||
           (l.promotion?.ppc?.isActive && l.promotion.ppc.ppcBalance > 0)
       ).length,
+      totalListings: listings.length,
       statusCount: {
         approved: listings.filter((l) => l.status === 'approved').length,
         pending: listings.filter((l) => l.status === 'pending').length,
@@ -231,7 +221,7 @@ export const getCreatorDashboardStats = async (req, res) => {
       },
     };
 
-    // ৮. ডাটাবেসে সেভ (Cache Update)
+    // ৪. ক্যাশ আপডেট
     await User.findByIdAndUpdate(creatorId, {
       $set: {
         'dashboardStats.lastUpdated': now,
@@ -248,13 +238,12 @@ export const getCreatorDashboardStats = async (req, res) => {
       lastUpdated: now,
     });
   } catch (error) {
-    console.error('Stats Error:', error);
+    console.error('Dashboard Stats Error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // export const getCreatorDashboardStats = async (req, res) => {
-
 //   try {
 //     const creatorId = req.user._id;
 //     const now = new Date();
