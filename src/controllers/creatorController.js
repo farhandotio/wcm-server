@@ -61,6 +61,7 @@ export const getPromotionAnalytics = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id;
 
+    // promotion.boost.amountPaid এবং durationDays অবশ্যই সিলেক্ট করতে হবে
     const listing = await Listing.findOne({ _id: id, creatorId: userId })
       .select('title promotion views isPromoted image')
       .lean();
@@ -78,7 +79,7 @@ export const getPromotionAnalytics = async (req, res) => {
     const consumptionRate =
       totalPurchased > 0 ? Number(((executed / totalPurchased) * 100).toFixed(1)) : 0;
 
-    // --- Boost Calculation (Real-time Focus) ---
+    // --- Boost Calculation ---
     let daysRemaining = 0;
     let hoursRemaining = 0;
     let isExpiringSoon = false;
@@ -88,9 +89,8 @@ export const getPromotionAnalytics = async (req, res) => {
       const diffMs = expiry - now;
 
       if (diffMs > 0) {
-        daysRemaining = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24)); // দিনের হিসাব ১ থেকে শুরু হওয়া ভালো
         hoursRemaining = Math.floor(diffMs / (1000 * 60 * 60));
-        // যদি ২৪ ঘণ্টার কম থাকে
         if (hoursRemaining < 24) isExpiringSoon = true;
       }
     }
@@ -115,6 +115,10 @@ export const getPromotionAnalytics = async (req, res) => {
         boost: {
           isActive: !!(boost.isActive && hoursRemaining > 0),
           expiresAt: boost.expiresAt,
+          // --- এই দুটো ফিল্ড ফ্রন্টএন্ড রিফান্ডের জন্য মাস্ট ---
+          amountPaid: Number(boost.amountPaid || 0),
+          durationDays: Number(boost.durationDays || 1),
+          // -------------------------------------------
           daysRemaining,
           hoursRemaining,
           isExpiringSoon,
@@ -122,6 +126,7 @@ export const getPromotionAnalytics = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('Analytics Error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };

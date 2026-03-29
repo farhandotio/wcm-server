@@ -14,6 +14,7 @@ import {
   checkAndCleanupExpiry,
 } from '../utils/promotionHelper.js';
 import { calculateVAT } from '../utils/vatHelper.js'; 
+import AuditLog from '../models/AuditLog.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -336,11 +337,12 @@ export const purchasePromotion = async (req, res) => {
 
     if (user.walletBalance < amountInEUR) throw new Error('Insufficient wallet balance.');
 
+    // ১. ওয়ালেট থেকে টাকা কাটা
     user.walletBalance = Number((user.walletBalance - amountInEUR).toFixed(2));
     await user.save({ session: dbSession });
 
     if (packageType === 'boost') {
-      // যদি আগে থেকেই বুস্ট একটিভ থাকে, তবে পুরনো এক্সপায়ারি ডেট থেকে দিন যোগ হবে
+      const boostDays = parseInt(days);
       let currentExpiry =
         listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date()
           ? new Date(listing.promotion.boost.expiresAt)
@@ -348,31 +350,52 @@ export const purchasePromotion = async (req, res) => {
 
       listing.promotion.boost.isActive = true;
       listing.promotion.boost.isPaused = false;
-      // টাকা এবং দিন যোগ হচ্ছে (ওভাররাইট নয়)
       listing.promotion.boost.amountPaid = (listing.promotion.boost.amountPaid || 0) + amountInEUR;
       listing.promotion.boost.durationDays =
-        (listing.promotion.boost.durationDays || 0) + parseInt(days);
+        (listing.promotion.boost.durationDays || 0) + boostDays;
 
-      currentExpiry.setDate(currentExpiry.getDate() + parseInt(days));
+      currentExpiry.setDate(currentExpiry.getDate() + boostDays);
       listing.promotion.boost.expiresAt = currentExpiry;
+
+      // --- নতুন লজিক: আজকের দিনের আর্নিং অডিট লগ ---
+      // আজকের দিনের জন্য আর্নড অ্যামাউন্ট (আজকের অংশটুকু রিফান্ড হবে না)
+      const dailyEarned = Number((amountInEUR / boostDays).toFixed(2));
+
+      await AuditLog.create(
+        [
+          {
+            user: userId,
+            action: 'BOOST_DAILY_EARNED',
+            targetType: 'Listing',
+            targetId: listingId,
+            details: {
+              listingTitle: listing.title,
+              earnedAmount: `${dailyEarned} EUR`,
+              type: 'purchase_day_amortization',
+              date: new Date().toISOString().split('T')[0],
+              note: 'Initial day earned upon purchase',
+            },
+          },
+        ],
+        { session: dbSession }
+      );
+      // -------------------------------------------
     } else if (packageType === 'ppc') {
       listing.promotion.ppc.isActive = true;
       listing.promotion.ppc.isPaused = false;
-      // ব্যালেন্স এবং ক্লিক যোগ হচ্ছে
       listing.promotion.ppc.ppcBalance += amountInEUR;
       listing.promotion.ppc.amountPaid += amountInEUR;
       listing.promotion.ppc.totalClicks += parseInt(totalClicks);
 
-      // CPC রিক্যালকুলেশন (পুরানো + নতুন মিলে এভারেজ)
       listing.promotion.ppc.costPerClick = Number(
         (listing.promotion.ppc.amountPaid / listing.promotion.ppc.totalClicks).toFixed(4)
       );
     }
 
-    // এখন লেভেল ক্যালকুলেট করলে সঠিক স্কোর আসবে
     applyPromotionLogic(listing);
     await listing.save({ session: dbSession });
 
+    // ট্রানজেকশন রেকর্ড (এটা আপনার Wallet History এর জন্য)
     const transaction = await Transaction.create(
       [
         {
@@ -386,16 +409,17 @@ export const purchasePromotion = async (req, res) => {
           invoiceNumber: `INT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
           vatAmount: 0,
           fxRate: 1,
-          stripeSessionId: undefined, // ডুপ্লিকেট এরর ফিক্স করতে undefined দিন
         },
       ],
       { session: dbSession }
     );
 
     await dbSession.commitTransaction();
-    res
-      .status(200)
-      .json({ success: true, transactionId: transaction[0]._id, newBalance: user.walletBalance });
+    res.status(200).json({
+      success: true,
+      transactionId: transaction[0]._id,
+      newBalance: user.walletBalance,
+    });
   } catch (error) {
     await dbSession.abortTransaction();
     res.status(400).json({ success: false, message: error.message });
