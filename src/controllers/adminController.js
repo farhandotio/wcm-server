@@ -9,6 +9,7 @@ import Transaction from '../models/Transaction.js';
 import Analytics from '../models/Analytics.js';
 import { SystemSettings } from '../models/SystemSettings.js';
 import AuditLog from '../models/AuditLog.js';
+import mongoose from 'mongoose';
 
 export const createTag = async (req, res) => {
   try {
