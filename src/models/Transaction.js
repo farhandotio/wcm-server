@@ -7,8 +7,8 @@ const transactionSchema = new mongoose.Schema(
     stripeSessionId: {
       type: String,
       unique: true,
-      sparse: true, 
-      default: null,
+      sparse: true,
+      default: undefined,
     },
     amountPaid: { type: Number, required: true },
     currency: { type: String, required: true, default: 'EUR' },

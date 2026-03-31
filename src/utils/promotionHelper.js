@@ -32,32 +32,36 @@ export const checkAndCleanupExpiry = (listing) => {
 };
 
 export const applyPromotionLogic = (listing) => {
-  // আগে এক্সপায়ারড গুলো পরিষ্কার করে নিবে যাতে লেভেল ভুল না আসে
   checkAndCleanupExpiry(listing);
-
   let boostScore = 0;
   let ppcScore = 0;
   const now = new Date();
 
-  // বুস্ট স্কোর (অ্যামাউন্ট এবং রিমেইনিং ডেইজ ভিত্তিক)
-  if (listing.promotion.boost.isActive) {
-    const amount = listing.promotion.boost.amountPaid || 0;
+  if (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) {
+    const totalAmount = listing.promotion.boost.amountPaid || 0;
     const expiry = new Date(listing.promotion.boost.expiresAt);
-    const daysDiff = Math.ceil(Math.abs(expiry - now) / (1000 * 60 * 60 * 24)) || 1;
-    boostScore = (amount / daysDiff) * 10;
+    
+    const timeDiff = expiry.getTime() - now.getTime();
+    const daysRemaining = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)) || 1;
+    
+    boostScore = (totalAmount / Math.max(daysRemaining, 1)) * 10;
   }
 
-  // পিপিছি স্কোর (সিপিসি এবং কারেন্ট ব্যালেন্স ভিত্তিক)
-  if (listing.promotion.ppc.isActive) {
+  if (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused) {
     const cpc = listing.promotion.ppc.costPerClick || 0.1;
     const balance = listing.promotion.ppc.ppcBalance || 0;
-    ppcScore = cpc * 50 + balance * 0.05;
+    ppcScore = (cpc * 100) + (balance * 0.5);
   }
 
   listing.promotion.level = Math.floor(boostScore + ppcScore);
-  listing.isPromoted = listing.promotion.boost.isActive || listing.promotion.ppc.isActive;
+  
+  listing.isPromoted = 
+    (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) || 
+    (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused);
 
-  if (!listing.isPromoted) listing.promotion.level = 0;
+  if (!listing.isPromoted) {
+    listing.promotion.level = 0;
+  }
 
   return listing;
 };

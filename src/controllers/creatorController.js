@@ -61,6 +61,7 @@ export const getPromotionAnalytics = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id;
 
+    // promotion.boost.amountPaid এবং durationDays অবশ্যই সিলেক্ট করতে হবে
     const listing = await Listing.findOne({ _id: id, creatorId: userId })
       .select('title promotion views isPromoted image')
       .lean();
@@ -78,7 +79,7 @@ export const getPromotionAnalytics = async (req, res) => {
     const consumptionRate =
       totalPurchased > 0 ? Number(((executed / totalPurchased) * 100).toFixed(1)) : 0;
 
-    // --- Boost Calculation (Real-time Focus) ---
+    // --- Boost Calculation ---
     let daysRemaining = 0;
     let hoursRemaining = 0;
     let isExpiringSoon = false;
@@ -88,9 +89,8 @@ export const getPromotionAnalytics = async (req, res) => {
       const diffMs = expiry - now;
 
       if (diffMs > 0) {
-        daysRemaining = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24)); // দিনের হিসাব ১ থেকে শুরু হওয়া ভালো
         hoursRemaining = Math.floor(diffMs / (1000 * 60 * 60));
-        // যদি ২৪ ঘণ্টার কম থাকে
         if (hoursRemaining < 24) isExpiringSoon = true;
       }
     }
@@ -115,6 +115,10 @@ export const getPromotionAnalytics = async (req, res) => {
         boost: {
           isActive: !!(boost.isActive && hoursRemaining > 0),
           expiresAt: boost.expiresAt,
+          // --- এই দুটো ফিল্ড ফ্রন্টএন্ড রিফান্ডের জন্য মাস্ট ---
+          amountPaid: Number(boost.amountPaid || 0),
+          durationDays: Number(boost.durationDays || 1),
+          // -------------------------------------------
           daysRemaining,
           hoursRemaining,
           isExpiringSoon,
@@ -122,6 +126,7 @@ export const getPromotionAnalytics = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('Analytics Error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -130,32 +135,24 @@ export const getCreatorDashboardStats = async (req, res) => {
   try {
     const creatorId = req.user._id;
     const now = new Date();
-    // ফ্রন্টএন্ড থেকে ?refresh=true পাঠালে ক্যাশ ইগনোর করবে
     const isForceRefresh = req.query.refresh === 'true';
 
-    // ১. ইউজার ডাটা আনা
     const user = await User.findById(creatorId).select('dashboardStats walletBalance');
-
     const lastUpdate = user?.dashboardStats?.lastUpdated
       ? new Date(user.dashboardStats.lastUpdated)
       : null;
-
-    // ক্যাশ ভ্যালিডেশন (২৪ ঘণ্টা অথবা ফোর্স রিফ্রেশ না হওয়া পর্যন্ত)
     const isCacheExpired = !lastUpdate || now - lastUpdate > 24 * 60 * 60 * 1000;
 
-    // ২. ক্যাশ রিটার্ন (যদি ফোর্স রিফ্রেশ না থাকে এবং ক্যাশ এক্সপায়ার না হয়)
     if (!isForceRefresh && !isCacheExpired && user?.dashboardStats?.data) {
       return res.status(200).json({
         success: true,
-        stats: user.dashboardStats.data.stats,
-        chartData: user.dashboardStats.data.chartData,
-        walletBalance: user.walletBalance.toFixed(2), // লেটেস্ট ওয়ালেট ব্যালেন্স সবসময় পাঠাবে
+        ...user.dashboardStats.data,
+        walletBalance: user.walletBalance.toFixed(2),
         isCached: true,
         lastUpdated: lastUpdate,
       });
     }
 
-    // ৩. নতুন ক্যালকুলেশন শুরু (Refresh Logic)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setHours(0, 0, 0, 0);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
@@ -167,50 +164,55 @@ export const getCreatorDashboardStats = async (req, res) => {
         creator: creatorId,
         status: 'completed',
         createdAt: { $gte: startOfMonth },
+        packageType: { $in: ['boost', 'ppc', 'refund_boost', 'refund_ppc'] },
       }),
-      Analytics.find({ creatorId }).lean(),
+      // সব অ্যানালিটিক্স ডেটা নেওয়া হচ্ছে
+      Analytics.find({ creatorId }).sort({ date: 1 }).lean(),
     ]);
 
-    // অ্যানালিটিক্স ক্যালকুলেশন
+    // ১. স্পেন্ড ক্যালকুলেশন
+    const totalMonthlySpend = transactions.reduce((acc, curr) => {
+      const amount = Number(curr.amountPaid) || 0;
+      if (['boost', 'ppc'].includes(curr.packageType)) return acc + amount;
+      if (['refund_boost', 'refund_ppc'].includes(curr.packageType)) return acc - amount;
+      return acc;
+    }, 0);
+
+    // ২. লাইফটাইম স্ট্যাটস (এটি চার্টের সাথে সিঙ্ক রাখতে সরাসরি অ্যানালিটিক্স থেকে নেওয়া হচ্ছে)
     const lifetimeViews = allAnalytics.reduce((acc, curr) => acc + (curr.views || 0), 0);
     const lifetimeClicks = allAnalytics.reduce((acc, curr) => acc + (curr.clicks || 0), 0);
 
-    // গ্রাফ ডাটা (৭ দিন)
+    // ৩. চার্ট ডেটা জেনারেশন (Fix: Date matching logic)
     const chartData = [];
     for (let i = 0; i < 7; i++) {
       const targetDate = new Date(sevenDaysAgo);
       targetDate.setDate(targetDate.getDate() + i);
-      const dateStr = targetDate.toISOString().split('T')[0];
-      const dayData = allAnalytics.filter(
-        (a) => new Date(a.date).toISOString().split('T')[0] === dateStr
-      );
+
+      // লোকাল ডেট স্ট্রিং (YYYY-MM-DD) বের করা যা ডাটাবেসের ডেটের সাথে মিলবে
+      const dStr = targetDate.toLocaleDateString('en-CA'); // Outputs YYYY-MM-DD accurately
+
+      const dayData = allAnalytics.filter((a) => {
+        const aDate = new Date(a.date).toLocaleDateString('en-CA');
+        return aDate === dStr;
+      });
+
       chartData.push({
         name: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
+        fullDate: dStr, // Debugging এর জন্য
         views: dayData.reduce((sum, d) => sum + (d.views || 0), 0),
         clicks: dayData.reduce((sum, d) => sum + (d.clicks || 0), 0),
       });
     }
 
-    const totalMonthlySpend = transactions.reduce(
-      (acc, curr) => acc + (Number(curr.amountPaid) || 0),
-      0
-    );
-
     const stats = {
       totalViews: lifetimeViews,
-      totalMonthlySpend: totalMonthlySpend.toFixed(2),
-      activeBoostsCount: listings.filter(
-        (l) => l.promotion?.boost?.isActive && new Date(l.promotion.boost.expiresAt) > now
-      ).length,
-      activePpcCount: listings.filter(
-        (l) => l.promotion?.ppc?.isActive && l.promotion.ppc.ppcBalance > 0
-      ).length,
+      totalClicks: lifetimeClicks,
+      totalMonthlySpend: Math.max(0, totalMonthlySpend).toFixed(2),
       totalActivePromoted: listings.filter(
         (l) =>
           (l.promotion?.boost?.isActive && new Date(l.promotion.boost.expiresAt) > now) ||
           (l.promotion?.ppc?.isActive && l.promotion.ppc.ppcBalance > 0)
       ).length,
-      totalClicks: lifetimeClicks,
       totalListings: listings.length,
       statusCount: {
         approved: listings.filter((l) => l.status === 'approved').length,
@@ -219,7 +221,7 @@ export const getCreatorDashboardStats = async (req, res) => {
       },
     };
 
-    // ৪. ক্যাশ আপডেট (ডাটাবেসে সেভ)
+    // ৪. ক্যাশ আপডেট
     await User.findByIdAndUpdate(creatorId, {
       $set: {
         'dashboardStats.lastUpdated': now,
@@ -231,12 +233,131 @@ export const getCreatorDashboardStats = async (req, res) => {
       success: true,
       stats,
       chartData,
-      walletBalance: user.walletBalance.toFixed(2), // লেটেস্ট ব্যালেন্স
+      walletBalance: user.walletBalance.toFixed(2),
       isCached: false,
       lastUpdated: now,
     });
   } catch (error) {
-    console.error('Stats Error:', error);
+    console.error('Dashboard Stats Error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// export const getCreatorDashboardStats = async (req, res) => {
+//   try {
+//     const creatorId = req.user._id;
+//     const now = new Date();
+//     const isForceRefresh = req.query.refresh === 'true';
+
+//     const user = await User.findById(creatorId).select('dashboardStats walletBalance');
+//     const lastUpdate = user?.dashboardStats?.lastUpdated
+//       ? new Date(user.dashboardStats.lastUpdated)
+//       : null;
+//     const isCacheExpired = !lastUpdate || now - lastUpdate > 24 * 60 * 60 * 1000;
+
+//     if (!isForceRefresh && !isCacheExpired && user?.dashboardStats?.data) {
+//       return res.status(200).json({
+//         success: true,
+//         stats: user.dashboardStats.data.stats,
+//         chartData: user.dashboardStats.data.chartData,
+//         walletBalance: user.walletBalance.toFixed(2),
+//         isCached: true,
+//         lastUpdated: lastUpdate,
+//       });
+//     }
+
+//     const sevenDaysAgo = new Date();
+//     sevenDaysAgo.setHours(0, 0, 0, 0);
+//     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+//     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+//     const [listings, transactions, allAnalytics] = await Promise.all([
+//       Listing.find({ creatorId }),
+//       Transaction.find({
+//         creator: creatorId,
+//         status: 'completed',
+//         createdAt: { $gte: startOfMonth },
+//         // এখানে ফিল্টার অ্যাড করা হয়েছে যেন শুধু রিলেভেন্ট ট্রানজেকশন আসে
+//         packageType: { $in: ['boost', 'ppc', 'refund_boost', 'refund_ppc'] },
+//       }),
+//       Analytics.find({ creatorId }).lean(),
+//     ]);
+
+//     // --- স্পেন্ড ক্যালকুলেশন ফিক্স (Spend Logic) ---
+//     const totalMonthlySpend = transactions.reduce((acc, curr) => {
+//       const amount = Number(curr.amountPaid) || 0;
+
+//       // যদি প্যাকেজ বুস্ট বা পিপিছি হয় তবে যোগ হবে
+//       if (curr.packageType === 'boost' || curr.packageType === 'ppc') {
+//         return acc + amount;
+//       }
+//       // যদি রিফান্ড হয় তবে খরচ থেকে বিয়োগ হবে
+//       if (curr.packageType === 'refund_boost' || curr.packageType === 'refund_ppc') {
+//         return acc - amount;
+//       }
+
+//       return acc;
+//     }, 0);
+
+//     // অ্যানালিটিক্স এবং গ্রাফ ডাটা (অপরিবর্তিত)
+//     const lifetimeViews = allAnalytics.reduce((acc, curr) => acc + (curr.views || 0), 0);
+//     const lifetimeClicks = allAnalytics.reduce((acc, curr) => acc + (curr.clicks || 0), 0);
+
+//     const chartData = [];
+//     for (let i = 0; i < 7; i++) {
+//       const targetDate = new Date(sevenDaysAgo);
+//       targetDate.setDate(targetDate.getDate() + i);
+//       const dateStr = targetDate.toISOString().split('T')[0];
+//       const dayData = allAnalytics.filter(
+//         (a) => new Date(a.date).toISOString().split('T')[0] === dateStr
+//       );
+//       chartData.push({
+//         name: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
+//         views: dayData.reduce((sum, d) => sum + (d.views || 0), 0),
+//         clicks: dayData.reduce((sum, d) => sum + (d.clicks || 0), 0),
+//       });
+//     }
+
+//     const stats = {
+//       totalViews: lifetimeViews,
+//       totalMonthlySpend: Math.max(0, totalMonthlySpend).toFixed(2), // নেগেটিভ যেন না আসে
+//       activeBoostsCount: listings.filter(
+//         (l) => l.promotion?.boost?.isActive && new Date(l.promotion.boost.expiresAt) > now
+//       ).length,
+//       activePpcCount: listings.filter(
+//         (l) => l.promotion?.ppc?.isActive && l.promotion.ppc.ppcBalance > 0
+//       ).length,
+//       totalActivePromoted: listings.filter(
+//         (l) =>
+//           (l.promotion?.boost?.isActive && new Date(l.promotion.boost.expiresAt) > now) ||
+//           (l.promotion?.ppc?.isActive && l.promotion.ppc.ppcBalance > 0)
+//       ).length,
+//       totalClicks: lifetimeClicks,
+//       totalListings: listings.length,
+//       statusCount: {
+//         approved: listings.filter((l) => l.status === 'approved').length,
+//         pending: listings.filter((l) => l.status === 'pending').length,
+//         rejected: listings.filter((l) => l.status === 'rejected').length,
+//       },
+//     };
+
+//     await User.findByIdAndUpdate(creatorId, {
+//       $set: {
+//         'dashboardStats.lastUpdated': now,
+//         'dashboardStats.data': { stats, chartData },
+//       },
+//     });
+
+//     res.status(200).json({
+//       success: true,
+//       stats,
+//       chartData,
+//       walletBalance: user.walletBalance.toFixed(2),
+//       isCached: false,
+//       lastUpdated: now,
+//     });
+//   } catch (error) {
+//     console.error('Stats Error:', error);
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// };

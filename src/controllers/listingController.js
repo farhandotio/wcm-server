@@ -26,6 +26,12 @@ export const handlePpcClick = async (req, res) => {
       return res.status(200).json({ success: true, message: 'Organic click recorded.' });
     }
 
+    if (listing.promotion.ppc.isPaused) {
+      return res
+        .status(200)
+        .json({ success: true, message: 'Campaign paused, organic click recorded.' });
+    }
+
     const alreadyClicked = await InteractionLog.findOne({
       listingId: id,
       type: 'ppc_click',
@@ -100,132 +106,6 @@ export const handlePpcClick = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
-// const applyPromotionLogic = (listing) => {
-//   const now = new Date();
-
-//   // ১. স্কোর ক্যালকুলেশন
-//   const boostScore =
-//     listing.promotion?.boost?.isActive && listing.promotion?.boost?.expiresAt > now ? 50 : 0;
-//   const ppcScore =
-//     listing.promotion?.ppc?.isActive && listing.promotion?.ppc?.ppcBalance > 0 ? 30 : 0;
-//   const engagementScore = (listing.favorites?.length || 0) * 2;
-
-//   const totalScore = boostScore + ppcScore + engagementScore;
-
-//   // ২. লেভেল সেট করা
-//   if (totalScore >= 70) listing.promotion.level = 3;
-//   else if (totalScore >= 30) listing.promotion.level = 2;
-//   else if (totalScore >= 5) listing.promotion.level = 1;
-//   else listing.promotion.level = 0;
-
-//   // ৩. প্রমোটেড স্ট্যাটাস আপডেট
-//   listing.isPromoted = boostScore > 0 || ppcScore > 0;
-
-//   return listing;
-// };
-
-// export const handlePpcClick = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const { deviceId } = req.body;
-//     const userId = req.user?._id;
-
-//     if (!deviceId) return res.status(400).json({ message: 'Security token (deviceId) missing.' });
-
-//     const listing = await Listing.findById(id);
-//     if (!listing) return res.status(404).json({ message: 'Listing not found' });
-
-//     // পিপিইউ একটিভ কি না চেক
-//     if (!listing.promotion?.ppc?.isActive || listing.promotion.ppc.ppcBalance <= 0) {
-//       return res.status(200).json({ success: true, message: 'Organic click recorded.' });
-//     }
-
-//     // ডুপ্লিকেট ক্লিক চেক
-//     const alreadyClicked = await InteractionLog.findOne({
-//       listingId: id,
-//       type: 'ppc_click',
-//       $or: [{ deviceId: deviceId }, ...(userId ? [{ userId: userId }] : [])],
-//     });
-
-//     if (alreadyClicked) {
-//       return res.status(200).json({ message: 'Duplicate click ignored.' });
-//     }
-
-//     const cost = listing.promotion.ppc.costPerClick || 0.1;
-
-//     // ব্যালেন্স চেক এবং আপডেট
-//     if (listing.promotion.ppc.ppcBalance >= cost) {
-//       const oldBalance = listing.promotion.ppc.ppcBalance;
-//       listing.promotion.ppc.ppcBalance = Number(
-//         (listing.promotion.ppc.ppcBalance - cost).toFixed(4)
-//       );
-//       listing.promotion.ppc.executedClicks += 1;
-
-//       let isAutoReset = false;
-//       // ব্যালেন্স শেষ হয়ে গেলে রিসেট
-//       if (listing.promotion.ppc.ppcBalance < cost) {
-//         listing.promotion.ppc.isActive = false;
-//         listing.promotion.ppc.ppcBalance = 0;
-//         listing.promotion.ppc.amountPaid = 0;
-//         listing.promotion.ppc.totalClicks = 0;
-//         listing.promotion.ppc.executedClicks = 0;
-//         isAutoReset = true;
-//       }
-
-//       // র‍্যাঙ্কিং লেভেল আপডেট (হেল্পার ফাংশন কল)
-//       applyPromotionLogic(listing);
-//       await listing.save();
-
-//       // ১. ইন্টারেকশন লগ তৈরি (User duplication check এর জন্য)
-//       await InteractionLog.create({
-//         listingId: id,
-//         userId: userId || null,
-//         deviceId: deviceId,
-//         type: 'ppc_click',
-//       });
-
-//       await createAuditLog({
-//         req,
-//         user: listing.creatorId,
-//         action: 'PPC_CLICK_DEDUCTION',
-//         targetType: 'Listing',
-//         targetId: id,
-//         details: {
-//           listingTitle: listing.title,
-//           costDeducted: `${cost} EUR`,
-//           remainingPpcBalance: `${listing.promotion.ppc.ppcBalance} EUR`,
-//           clickerDeviceId: deviceId,
-//           isBudgetExhausted: isAutoReset,
-//           totalExecutedClicks: listing.promotion.ppc.executedClicks,
-//         },
-//       });
-
-//       // ৩. অ্যানালিটিক্স আপডেট
-//       const today = new Date();
-//       today.setHours(0, 0, 0, 0);
-//       await Analytics.findOneAndUpdate(
-//         { listingId: id, date: today },
-//         {
-//           $inc: { clicks: 1 },
-//           $setOnInsert: { creatorId: listing.creatorId?._id || listing.creatorId },
-//         },
-//         { upsert: true }
-//       );
-
-//       return res.status(200).json({
-//         success: true,
-//         balance: listing.promotion.ppc.ppcBalance,
-//         currentLevel: listing.promotion.level,
-//       });
-//     }
-
-//     res.status(400).json({ message: 'Insufficient PPC balance.' });
-//   } catch (error) {
-//     console.error('PPC Click Error:', error);
-//     res.status(500).json({ message: error.message });
-//   }
-// };
 
 export const getCategoriesAndTags = async (req, res) => {
   try {
@@ -348,6 +228,12 @@ export const createListing = async (req, res) => {
       image: imageUrl,
     });
 
+    const actualCount = await Listing.countDocuments({ creatorId: req.user._id });
+
+    await User.findByIdAndUpdate(req.user._id, {
+      listingsCount: actualCount,
+    });
+
     res.status(201).json({ message: 'Listing created successfully', newListing });
   } catch (error) {
     console.error('Create Error:', error);
@@ -384,7 +270,7 @@ export const updateListing = async (req, res) => {
       listing.culturalTags = tags;
     }
 
-    if (listing.status !== 'approved') {
+    if (listing.status !== 'approved' && listing.status !== 'blocked') {
       listing.status = 'pending';
       listing.rejectionReason = '';
     }
@@ -474,7 +360,6 @@ export const getPublicListings = async (req, res) => {
           .select('_id')
           .lean(),
       ]);
-
       const tagIds = matchingTags.map((t) => t._id);
       const catIds = matchingCategories.map((c) => c._id);
 
@@ -489,11 +374,10 @@ export const getPublicListings = async (req, res) => {
     }
 
     const resPerPage = parseInt(limit) || 10;
-
     const skip = offset ? parseInt(offset) : resPerPage * (parseInt(page || 1) - 1);
 
     let listings = await Listing.find(query)
-      .populate('creatorId', 'username profile')
+      .populate('creatorId', 'username profile listingsCount') // listingsCount পপুলেট করা হলো
       .populate('category', 'title')
       .populate('culturalTags', 'title image')
       .sort({
@@ -509,16 +393,34 @@ export const getPublicListings = async (req, res) => {
     const totalListings = await Listing.countDocuments(query);
     const currentUserId = req.user ? req.user._id.toString() : null;
 
-    const formattedListings = listings.map((item) => {
-      const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
-      return {
-        ...item,
-        isFavorited: currentUserId
-          ? safeFavorites.some((favId) => favId.toString() === currentUserId)
-          : false,
-        favoritesCount: safeFavorites.length,
-      };
-    });
+    const formattedListings = await Promise.all(
+      listings.map(async (item) => {
+        const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
+
+        // ক্রিয়েটরের আরও কতগুলো একটিভ লিস্টিং আছে তা বের করা
+        // (যদি প্রোফাইলে সরাসরি listingsCount না থাকে তবে সরাসরি কাউন্ট করা)
+        const creatorActiveListings = await Listing.countDocuments({
+          creatorId: item.creatorId?._id,
+          status: 'approved',
+        });
+
+        const effectiveIsPromoted =
+          (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
+          (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+
+        return {
+          ...item,
+          isPromoted: effectiveIsPromoted,
+          isFavorited: currentUserId
+            ? safeFavorites.some((favId) => favId.toString() === currentUserId)
+            : false,
+          favoritesCount: safeFavorites.length,
+          creatorStats: {
+            totalApprovedListings: creatorActiveListings,
+          },
+        };
+      })
+    );
 
     res.status(200).json({
       success: true,
@@ -531,11 +433,7 @@ export const getPublicListings = async (req, res) => {
     });
   } catch (error) {
     console.error('Public Listings Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server Error',
-      details: error.message,
-    });
+    res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
 
@@ -710,6 +608,79 @@ export const toggleFavorite = async (req, res) => {
   }
 };
 
+export const getMyFavorites = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { limit, page, offset, category, search } = req.query;
+
+    const query = { favorites: userId, status: 'approved' };
+
+    if (category && mongoose.Types.ObjectId.isValid(category)) query.category = category;
+    if (search) query.title = { $regex: search, $options: 'i' };
+
+    const resPerPage = parseInt(limit) || 12;
+    const skip = offset ? parseInt(offset) : resPerPage * (parseInt(page || 1) - 1);
+
+    // ১. প্রথমে ফেভারিট লিস্টিংগুলো ফেচ করা
+    const [listings, totalListings] = await Promise.all([
+      Listing.find(query)
+        .populate('creatorId', 'username profile firstName lastName')
+        .populate('category', 'title')
+        .populate('culturalTags', 'title image')
+        .sort({ createdAt: -1 })
+        .limit(resPerPage)
+        .skip(skip)
+        .lean(),
+      Listing.countDocuments(query),
+    ]);
+
+    // ২. প্রতিটি লিস্টিংয়ের ক্রিয়েটরের এপ্রুভড লিস্টিং সংখ্যা বের করা (প্যারালাল কোয়েরি)
+    const formattedListings = await Promise.all(
+      listings.map(async (item) => {
+        const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
+
+        // ক্রিয়েটরের এপ্রুভড লিস্টিং কাউন্ট (Real-time count)
+        const creatorActiveCount = await Listing.countDocuments({
+          creatorId: item.creatorId?._id,
+          status: 'approved',
+        });
+
+        const effectiveIsPromoted =
+          (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
+          (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+
+        return {
+          ...item,
+          isPromoted: effectiveIsPromoted,
+          isFavorited: true, // যেহেতু এটি ফেভারিট লিস্ট
+          favoritesCount: safeFavorites.length,
+          creatorStats: {
+            totalApprovedListings: creatorActiveCount,
+          },
+        };
+      })
+    );
+
+    // ৩. ফাইনাল রেসপন্স
+    res.status(200).json({
+      success: true,
+      total: totalListings,
+      count: formattedListings.length,
+      currentPage: parseInt(page) || 1,
+      nextOffset: skip + formattedListings.length,
+      hasMore: skip + formattedListings.length < totalListings,
+      listings: formattedListings,
+    });
+  } catch (error) {
+    console.error('Favorites Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      details: error.message,
+    });
+  }
+};
+
 export const deleteListing = async (req, res) => {
   try {
     const { id } = req.params;
@@ -733,6 +704,13 @@ export const deleteListing = async (req, res) => {
     }
 
     await Listing.findByIdAndDelete(id);
+
+    const remainingCount = await Listing.countDocuments({ creatorId: req.user._id });
+
+    await User.findByIdAndUpdate(req.user._id, {
+      listingsCount: remainingCount,
+    });
+
     res.status(200).json({ message: 'Listing deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -810,5 +788,21 @@ export const cancelPromotion = async (req, res) => {
     dbSession.endSession();
     console.error('Promotion Cancel Error:', error);
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const getModerationReasons = async (req, res) => {
+  try {
+    const reasonCodes = Listing.schema.path('rejectionReason').enumValues;
+
+    // খালি ভ্যালু থাকলে সেগুলো ফিল্টার করা
+    const filteredReasons = reasonCodes.filter((reason) => reason && reason !== '');
+
+    res.status(200).json({
+      success: true,
+      reasons: filteredReasons,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Model or Enum path not found' });
   }
 };

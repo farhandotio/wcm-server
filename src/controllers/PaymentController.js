@@ -13,6 +13,8 @@ import {
   applyPromotionLogic,
   checkAndCleanupExpiry,
 } from '../utils/promotionHelper.js';
+import { calculateVAT } from '../utils/vatHelper.js'; 
+import AuditLog from '../models/AuditLog.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -32,15 +34,177 @@ const getExchangeRate = async (fromCurrency, toCurrency) => {
   }
 };
 
+// export const createCheckoutSession = async (req, res) => {
+//   try {
+//     const { amount, currency } = req.body;
+
+//     if (!amount || amount < 5)
+//       return res.status(400).json({ message: 'Minimum top-up is 5 units.' });
+
+//     const paymentCurrency = (currency || 'eur').toLowerCase();
+
+//     const session = await stripe.checkout.sessions.create({
+//       payment_method_types: ['card'],
+//       line_items: [
+//         {
+//           price_data: {
+//             currency: paymentCurrency,
+//             product_data: {
+//               name: `Wallet Top-up: ${req.user.firstName}`,
+//               description: `Adding funds to your creator wallet`,
+//             },
+//             unit_amount: Math.round(Number(amount) * 100),
+//           },
+//           quantity: 1,
+//         },
+//       ],
+//       mode: 'payment',
+//       success_url: `${process.env.CLIENT_URL}/creator/promotions?success=true`,
+//       cancel_url: `${process.env.CLIENT_URL}/creator/promotions?canceled=true`,
+//       metadata: {
+//         creatorId: req.user._id.toString(),
+//         type: 'wallet_topup',
+//         originalCurrency: paymentCurrency,
+//       },
+//     });
+
+//     res.status(200).json({ url: session.url });
+//   } catch (error) {
+//     res.status(500).json({ message: 'Stripe failed. Try again.' });
+//   }
+// };
+
+// export const handleStripeWebhook = async (req, res) => {
+//   const sig = req.headers['stripe-signature'];
+//   let event;
+
+//   try {
+//     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+//   } catch (err) {
+//     return res.status(400).send(`Webhook Error: ${err.message}`);
+//   }
+
+//   if (event.type === 'checkout.session.completed') {
+//     const session = event.data.object;
+//     const { creatorId, originalCurrency } = session.metadata;
+
+//     const dbSession = await mongoose.startSession();
+//     dbSession.startTransaction();
+
+//     try {
+//       const amountPaid = session.amount_total / 100; // কাস্টমার যা পে করেছে [cite: 8]
+//       let walletCreditInEUR = 0;
+//       let finalVatAmount = 0;
+//       let appliedVatRate = 0;
+
+//       // ১. কারেন্সি ভিত্তিক ভ্যাট এবং কনভার্সন লজিক
+//       if (originalCurrency === 'eur') {
+//         // EUR পেমেন্ট হলে কোনো ভ্যাট নেই
+//         walletCreditInEUR = amountPaid;
+//         appliedVatRate = 0;
+//         finalVatAmount = 0;
+//       } else {
+//         // অন্য কারেন্সি (যেমন USD) হলে এক্সচেঞ্জ রেট এবং ভ্যাট ক্যালকুলেশন [cite: 8, 9]
+//         const fxRate = await getExchangeRate(originalCurrency, 'EUR');
+
+//         // আপনার আগের লজিক অনুযায়ী ভ্যাট ক্যালকুলেশন (যদি USD তে ভ্যাট রাখতে চান) [cite: 8]
+//         // যদি USD তেও ভ্যাট না চান তবে VAT_PERCENT = 0 করে দিন
+//         const VAT_PERCENT = Number(process.env.GLOBAL_VAT_RATE) || 0;
+//         const divisor = 1 + VAT_PERCENT / 100;
+
+//         const amountWithoutVat = amountPaid / divisor;
+//         finalVatAmount = Number((amountPaid - amountWithoutVat).toFixed(2));
+
+//         // EUR এ কনভার্ট করে ওয়ালেটে ক্রেডিট
+//         walletCreditInEUR = Number((amountWithoutVat * fxRate).toFixed(2));
+//       }
+
+//       // ২. ইউজারের ওয়ালেট আপডেট
+//       const updatedUser = await User.findByIdAndUpdate(
+//         creatorId,
+//         { $inc: { walletBalance: walletCreditInEUR } },
+//         { session: dbSession, new: true }
+//       );
+
+//       // ৩. ট্রানজেকশন রেকর্ড তৈরি [cite: 2, 8]
+//       const transaction = await Transaction.create(
+//         [
+//           {
+//             creator: creatorId,
+//             stripeSessionId: session.id,
+//             amountPaid,
+//             currency: originalCurrency.toUpperCase(),
+//             amountInEUR: walletCreditInEUR,
+//             packageType: 'wallet_topup',
+//             status: 'completed',
+//             vatRate: appliedVatRate,
+//             vatAmount: finalVatAmount,
+//             invoiceNumber: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+//           },
+//         ],
+//         { session: dbSession }
+//       );
+
+//       // ৪. অডিট লগ তৈরি
+//       await createAuditLog({
+//         req,
+//         user: creatorId,
+//         action: 'WALLET_TOPUP_SUCCESS',
+//         targetType: 'Transaction',
+//         targetId: transaction[0]._id,
+//         details: {
+//           paidAmount: `${amountPaid} ${originalCurrency.toUpperCase()}`,
+//           creditedEUR: `${walletCreditInEUR} EUR`,
+//           newBalance: `${updatedUser.walletBalance} EUR`,
+//         },
+//       });
+
+//       await dbSession.commitTransaction();
+//       console.log(`Successfully credited ${walletCreditInEUR} EUR to: ${creatorId}`);
+//     } catch (error) {
+//       await dbSession.abortTransaction();
+//       console.error('Webhook processing failed:', error);
+//     } finally {
+//       dbSession.endSession();
+//     }
+//   }
+//   res.json({ received: true });
+// };
+
+
 export const createCheckoutSession = async (req, res) => {
   try {
     const { amount, currency } = req.body;
+
+    // ১. ইউজার ডাটা চেক
+    const user = await User.findById(req.user._id);
+    if (!user || !user.profile) {
+      return res
+        .status(400)
+        .json({ message: 'Profile information missing. Please complete your profile.' });
+    }
 
     if (!amount || amount < 5)
       return res.status(400).json({ message: 'Minimum top-up is 5 units.' });
 
     const paymentCurrency = (currency || 'eur').toLowerCase();
 
+    // ২. ডাইনামিক ভ্যাট ক্যালকুলেশন
+    const netAmount = Number(amount);
+
+    // প্রোফাইল থেকে ডাটা বের করে ফাংশনে পাঠানো হচ্ছে
+    // আপনার ফাংশন অনুযায়ী: calculateVAT(countryCode, isBusiness, isValidVAT)
+    const vatResult = calculateVAT(
+      user.profile.countryCode,
+      user.profile.customerType === 'business',
+      user.profile.isVatValid
+    );
+
+    const vatPercent = vatResult.rate; // রেটটি বের করে আনা হলো
+    const vatAmount = (netAmount * vatPercent) / 100;
+    const totalAmount = netAmount + vatAmount;
+
+    // ৩. স্ট্রাইপ সেশন তৈরি
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [
@@ -48,10 +212,10 @@ export const createCheckoutSession = async (req, res) => {
           price_data: {
             currency: paymentCurrency,
             product_data: {
-              name: `Wallet Top-up: ${req.user.firstName}`,
-              description: `Adding funds to your creator wallet`,
+              name: `Wallet Top-up: ${user.firstName}`,
+              description: `Net: ${netAmount} | VAT (${vatPercent}% - ${vatResult.type}): ${vatAmount.toFixed(2)}`,
             },
-            unit_amount: Math.round(Number(amount) * 100),
+            unit_amount: Math.round(totalAmount * 100),
           },
           quantity: 1,
         },
@@ -60,15 +224,20 @@ export const createCheckoutSession = async (req, res) => {
       success_url: `${process.env.CLIENT_URL}/creator/promotions?success=true`,
       cancel_url: `${process.env.CLIENT_URL}/creator/promotions?canceled=true`,
       metadata: {
-        creatorId: req.user._id.toString(),
+        creatorId: user._id.toString(),
         type: 'wallet_topup',
         originalCurrency: paymentCurrency,
+        netAmount: netAmount.toString(),
+        vatAmount: vatAmount.toString(),
+        vatRate: vatPercent.toString(),
       },
     });
 
     res.status(200).json({ url: session.url });
   } catch (error) {
-    res.status(500).json({ message: 'Stripe failed. Try again.' });
+    console.error('Stripe Error:', error);
+    // এরর মেসেজ পাঠানো যাতে ফ্রন্টএন্ডে দেখা যায়
+    res.status(500).json({ message: error.message || 'Server side error in payment.' });
   }
 };
 
@@ -84,81 +253,67 @@ export const handleStripeWebhook = async (req, res) => {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    const { creatorId, originalCurrency } = session.metadata;
+    const { creatorId, originalCurrency, netAmount, vatAmount, vatRate } = session.metadata;
 
     const dbSession = await mongoose.startSession();
     dbSession.startTransaction();
 
     try {
-      const amountPaid = session.amount_total / 100; // কাস্টমার যা পে করেছে [cite: 8]
+      const totalPaid = session.amount_total / 100;
+      const netPaid = Number(netAmount); // ভ্যাট ছাড়া আসল টাকা
+      const vatPaid = Number(vatAmount);
+
       let walletCreditInEUR = 0;
-      let finalVatAmount = 0;
-      let appliedVatRate = 0;
 
-      // ১. কারেন্সি ভিত্তিক ভ্যাট এবং কনভার্সন লজিক
+      // ১. কারেন্সি কনভার্সন (যদি EUR না হয়)
       if (originalCurrency === 'eur') {
-        // EUR পেমেন্ট হলে কোনো ভ্যাট নেই
-        walletCreditInEUR = amountPaid;
-        appliedVatRate = 0;
-        finalVatAmount = 0;
+        walletCreditInEUR = netPaid; // শুধুমাত্র নেট অ্যামাউন্ট ওয়ালেটে যাবে
       } else {
-        // অন্য কারেন্সি (যেমন USD) হলে এক্সচেঞ্জ রেট এবং ভ্যাট ক্যালকুলেশন [cite: 8, 9]
         const fxRate = await getExchangeRate(originalCurrency, 'EUR');
-
-        // আপনার আগের লজিক অনুযায়ী ভ্যাট ক্যালকুলেশন (যদি USD তে ভ্যাট রাখতে চান) [cite: 8]
-        // যদি USD তেও ভ্যাট না চান তবে VAT_PERCENT = 0 করে দিন
-        const VAT_PERCENT = Number(process.env.GLOBAL_VAT_RATE) || 0;
-        const divisor = 1 + VAT_PERCENT / 100;
-
-        const amountWithoutVat = amountPaid / divisor;
-        finalVatAmount = Number((amountPaid - amountWithoutVat).toFixed(2));
-
-        // EUR এ কনভার্ট করে ওয়ালেটে ক্রেডিট
-        walletCreditInEUR = Number((amountWithoutVat * fxRate).toFixed(2));
+        walletCreditInEUR = Number((netPaid * fxRate).toFixed(2));
       }
 
-      // ২. ইউজারের ওয়ালেট আপডেট
+      // ২. ওয়ালেট আপডেট
       const updatedUser = await User.findByIdAndUpdate(
         creatorId,
         { $inc: { walletBalance: walletCreditInEUR } },
         { session: dbSession, new: true }
       );
 
-      // ৩. ট্রানজেকশন রেকর্ড তৈরি [cite: 2, 8]
+      // ৩. ট্রানজেকশন রেকর্ড (Full Compliance)
       const transaction = await Transaction.create(
         [
           {
             creator: creatorId,
             stripeSessionId: session.id,
-            amountPaid,
+            amountPaid: totalPaid, // ইউজার যা পে করেছে (Net + VAT)
             currency: originalCurrency.toUpperCase(),
-            amountInEUR: walletCreditInEUR,
+            amountInEUR: walletCreditInEUR, // ওয়ালেটে যা ঢুকেছে (Net)
             packageType: 'wallet_topup',
             status: 'completed',
-            vatRate: appliedVatRate,
-            vatAmount: finalVatAmount,
+            vatAmount: vatPaid, // কত ট্যাক্স কাটা হয়েছে
             invoiceNumber: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           },
         ],
         { session: dbSession }
       );
 
-      // ৪. অডিট লগ তৈরি
-      await createAuditLog({
-        req,
-        user: creatorId,
-        action: 'WALLET_TOPUP_SUCCESS',
-        targetType: 'Transaction',
-        targetId: transaction[0]._id,
-        details: {
-          paidAmount: `${amountPaid} ${originalCurrency.toUpperCase()}`,
-          creditedEUR: `${walletCreditInEUR} EUR`,
-          newBalance: `${updatedUser.walletBalance} EUR`,
-        },
-      });
+      // ৪. অডিট লগ (ঐচ্ছিক কিন্তু ভালো প্র্যাকটিস)
+      if (global.createAuditLog) {
+        await createAuditLog({
+          user: creatorId,
+          action: 'WALLET_TOPUP_SUCCESS',
+          targetId: transaction[0]._id,
+          details: {
+            net: `${netPaid} ${originalCurrency}`,
+            vat: `${vatPaid} (${vatRate}%)`,
+            credited: `${walletCreditInEUR} EUR`,
+          },
+        });
+      }
 
       await dbSession.commitTransaction();
-      console.log(`Successfully credited ${walletCreditInEUR} EUR to: ${creatorId}`);
+      console.log(`Credited ${walletCreditInEUR} EUR (VAT excluded) to: ${creatorId}`);
     } catch (error) {
       await dbSession.abortTransaction();
       console.error('Webhook processing failed:', error);
@@ -180,50 +335,117 @@ export const purchasePromotion = async (req, res) => {
     const listing = await Listing.findById(listingId).session(dbSession);
     const user = await User.findById(userId).session(dbSession);
 
-    // ১. এক্সপায়ারি ক্লিনআপ (যাতে পুরোনো ডাটা থাকলে রিসেট হয়ে যায়)
-    checkAndCleanupExpiry(listing);
-
-    // ২. ওভাররাইড প্রোটেকশন
-    if (packageType === 'boost' && listing.promotion.boost.isActive) {
-      throw new Error('Boost is already active. Wait for it to expire.');
-    }
-    if (packageType === 'ppc' && listing.promotion.ppc.isActive) {
-      throw new Error('PPC balance still exists. Use it first.');
-    }
-
     if (user.walletBalance < amountInEUR) throw new Error('Insufficient wallet balance.');
 
-    // ৩. ওয়ালেট কাটাকাটি
+    // ১. ওয়ালেট থেকে টাকা কাটা
     user.walletBalance = Number((user.walletBalance - amountInEUR).toFixed(2));
     await user.save({ session: dbSession });
 
-    // ৪. নতুন প্যাকেজ সেট করা
     if (packageType === 'boost') {
+      const boostDays = parseInt(days);
+      let currentExpiry =
+        listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date()
+          ? new Date(listing.promotion.boost.expiresAt)
+          : new Date();
+
       listing.promotion.boost.isActive = true;
-      listing.promotion.boost.amountPaid = amountInEUR;
-      const expiry = new Date();
-      expiry.setDate(expiry.getDate() + parseInt(days));
-      listing.promotion.boost.expiresAt = expiry;
+      listing.promotion.boost.isPaused = false;
+      listing.promotion.boost.amountPaid = (listing.promotion.boost.amountPaid || 0) + amountInEUR;
+      listing.promotion.boost.durationDays =
+        (listing.promotion.boost.durationDays || 0) + boostDays;
+
+      currentExpiry.setDate(currentExpiry.getDate() + boostDays);
+      listing.promotion.boost.expiresAt = currentExpiry;
+
+      // --- নতুন লজিক: আজকের দিনের আর্নিং অডিট লগ ---
+      // আজকের দিনের জন্য আর্নড অ্যামাউন্ট (আজকের অংশটুকু রিফান্ড হবে না)
+      const dailyEarned = Number((amountInEUR / boostDays).toFixed(2));
+
+      await AuditLog.create(
+        [
+          {
+            user: userId,
+            action: 'BOOST_DAILY_EARNED',
+            targetType: 'Listing',
+            targetId: listingId,
+            details: {
+              listingTitle: listing.title,
+              earnedAmount: `${dailyEarned} EUR`,
+              type: 'purchase_day_amortization',
+              date: new Date().toISOString().split('T')[0],
+              note: 'Initial day earned upon purchase',
+            },
+          },
+        ],
+        { session: dbSession }
+      );
+      // -------------------------------------------
     } else if (packageType === 'ppc') {
       listing.promotion.ppc.isActive = true;
-      listing.promotion.ppc.ppcBalance = amountInEUR;
-      listing.promotion.ppc.amountPaid = amountInEUR;
-      listing.promotion.ppc.totalClicks = parseInt(totalClicks);
-      listing.promotion.ppc.costPerClick = Number((amountInEUR / totalClicks).toFixed(4));
+      listing.promotion.ppc.isPaused = false;
+      listing.promotion.ppc.ppcBalance += amountInEUR;
+      listing.promotion.ppc.amountPaid += amountInEUR;
+      listing.promotion.ppc.totalClicks += parseInt(totalClicks);
+
+      listing.promotion.ppc.costPerClick = Number(
+        (listing.promotion.ppc.amountPaid / listing.promotion.ppc.totalClicks).toFixed(4)
+      );
     }
 
-    // ৫. লেভেল ক্যালকুলেশন (এটি আগের প্যাকেজ থাকলেও দুটোর কম্বাইন্ড লেভেল বের করবে)
     applyPromotionLogic(listing);
     await listing.save({ session: dbSession });
 
-    // ট্রানজেকশন এবং অডিট লগ আপনার আগের মতই থাকবে...
+    // ট্রানজেকশন রেকর্ড (এটা আপনার Wallet History এর জন্য)
+    const transaction = await Transaction.create(
+      [
+        {
+          creator: userId,
+          listing: listingId,
+          amountPaid: amountInEUR,
+          amountInEUR: amountInEUR,
+          currency: 'EUR',
+          packageType: packageType,
+          status: 'completed',
+          invoiceNumber: `INT-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`,
+          vatAmount: 0,
+          fxRate: 1,
+        },
+      ],
+      { session: dbSession }
+    );
+
     await dbSession.commitTransaction();
-    res.status(200).json({ success: true, newBalance: user.walletBalance });
+    res.status(200).json({
+      success: true,
+      transactionId: transaction[0]._id,
+      newBalance: user.walletBalance,
+    });
   } catch (error) {
     await dbSession.abortTransaction();
     res.status(400).json({ success: false, message: error.message });
   } finally {
     dbSession.endSession();
+  }
+};
+
+export const togglePausePromotion = async (req, res) => {
+  const { listingId, packageType } = req.body;
+  try {
+    const listing = await Listing.findById(listingId);
+    if (packageType === 'boost') {
+      listing.promotion.boost.isPaused = !listing.promotion.boost.isPaused;
+    } else if (packageType === 'ppc') {
+      listing.promotion.ppc.isPaused = !listing.promotion.ppc.isPaused;
+    }
+    applyPromotionLogic(listing);
+    await listing.save();
+    res.status(200).json({
+      success: true,
+      isPaused:
+        packageType === 'boost' ? listing.promotion.boost.isPaused : listing.promotion.ppc.isPaused,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -238,40 +460,92 @@ export const cancelPromotion = async (req, res) => {
     const listing = await Listing.findById(listingId).session(dbSession);
     const user = await User.findById(userId).session(dbSession);
 
+    if (!listing) throw new Error('Listing not found');
+
     let refundAmount = 0;
     const now = new Date();
 
-    if (packageType === 'boost' && listing.promotion.boost.isActive) {
-      const expiry = new Date(listing.promotion.boost.expiresAt);
+    if (packageType === 'boost' && listing.promotion?.boost?.isActive) {
+      const boost = listing.promotion.boost;
+      const expiry = new Date(boost.expiresAt);
+
       if (expiry > now) {
-        // ব্যবহৃত দিনের টাকা কেটে বাকিটা রিফান্ড (উদাহরণস্বরূপ ৩০ দিনের প্যাকেজ ধরলে)
-        const totalPaid = listing.promotion.boost.amountPaid;
-        const remainingTime = expiry.getTime() - now.getTime();
-        const remainingDays = Math.max(0, remainingTime / (1000 * 60 * 60 * 24));
-        refundAmount = Number(((totalPaid / 30) * remainingDays).toFixed(2));
+        const totalPaid = Number(boost.amountPaid) || 0;
+        const totalDays = Number(boost.durationDays) || 1;
+
+        // ১. প্রতিদিনের রেট বের করা
+        const dailyRate = totalPaid / totalDays;
+
+        // ২. কতদিন বাকি আছে (পূর্ণ দিন)
+        const remainingTimeMs = expiry.getTime() - now.getTime();
+        const remainingDays = Math.floor(remainingTimeMs / (24 * 60 * 60 * 1000));
+
+        if (remainingDays > 0) {
+          refundAmount = Number((remainingDays * dailyRate).toFixed(2));
+        }
+
+        // ৩. সেফটি চেক
+        if (refundAmount > totalPaid) refundAmount = totalPaid;
+
+        console.log(
+          `DEBUG: Paid: ${totalPaid}, Days: ${totalDays}, Remaining: ${remainingDays}, Refund: ${refundAmount}`
+        );
       }
-      resetBoost(listing); // বুস্ট ডাটা ক্লিয়ার
-    } else if (packageType === 'ppc' && listing.promotion.ppc.isActive) {
-      refundAmount = listing.promotion.ppc.ppcBalance; // পুরো কারেন্ট ব্যালেন্স রিফান্ড
-      resetPPC(listing); // পিপিছি ডাটা ক্লিয়ার
+
+      // ৪. রিফান্ড হোক বা না হোক, বুস্টের দিন এবং টাকা ০ করে ফ্রেশ করা (আপনার রিকোয়ারমেন্ট অনুযায়ী)
+      boost.isActive = false;
+      boost.isPaused = false;
+      boost.amountPaid = 0;
+      boost.durationDays = 0; // এখানে ০ করে দেওয়া হলো
+      boost.expiresAt = null;
+    } else if (packageType === 'ppc' && listing.promotion?.ppc?.isActive) {
+      refundAmount = listing.promotion.ppc.ppcBalance || 0;
+
+      // PPC রিসেট
+      listing.promotion.ppc.isActive = false;
+      listing.promotion.ppc.isPaused = false;
+      listing.promotion.ppc.ppcBalance = 0;
+      listing.promotion.ppc.amountPaid = 0;
+      listing.promotion.ppc.totalClicks = 0;
+      listing.promotion.ppc.executedClicks = 0;
     }
 
-    // ওয়ালেটে রিফান্ড অ্যাড
+    // ৫. ওয়ালেট আপডেট এবং ট্রানজেকশন রেকর্ড
     if (refundAmount > 0) {
       user.walletBalance = Number((user.walletBalance + refundAmount).toFixed(2));
       await user.save({ session: dbSession });
-      // রিফান্ড ট্রানজেকশন ক্রিয়েট...
+
+      await Transaction.create(
+        [
+          {
+            creator: userId,
+            listing: listingId,
+            amountPaid: refundAmount,
+            currency: 'EUR',
+            amountInEUR: refundAmount,
+            packageType: packageType === 'boost' ? 'refund_boost' : 'refund_ppc',
+            status: 'completed',
+            invoiceNumber: `REF-${Date.now()}-${listingId.toString().slice(-4)}`,
+          },
+        ],
+        { session: dbSession }
+      );
     }
 
-    // লেভেল আপডেট (যদি অন্য কোনো প্যাকেজ অন থাকে সেটার স্কোর থাকবে, না থাকলে ০ হবে)
+    // ৬. প্রমোশন লেভেল আপডেট (এখন ০ আসবে যেহেতু বুস্ট নেই)
     applyPromotionLogic(listing);
     await listing.save({ session: dbSession });
 
     await dbSession.commitTransaction();
-    res.status(200).json({ success: true, refundAmount });
+    res.status(200).json({
+      success: true,
+      refundAmount,
+      newBalance: user.walletBalance,
+      message: `Refunded €${refundAmount} and boost refreshed.`,
+    });
   } catch (error) {
     await dbSession.abortTransaction();
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   } finally {
     dbSession.endSession();
   }

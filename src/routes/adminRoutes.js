@@ -20,11 +20,18 @@ import {
   exportTransactionsExcel,
   updatePpcBalanceManual,
   getPromotedListings,
+  getTagsByCategory,
+  getAllCategories,
+  getUserById,
+  exportTransactionsByRange,
 } from '../controllers/adminController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 import upload from '../config/multer.js';
 
 const router = express.Router();
+
+router.get('/tags/by-category/:categoryId', getTagsByCategory);
+router.get('/categories', getAllCategories);
 
 router.use(authMiddleware);
 router.use(authorizeRoles('admin'));
@@ -32,21 +39,23 @@ router.use(authorizeRoles('admin'));
 router.get('/stats', getAdminStats);
 router.get('/transactions', getAllTransactions);
 router.get('/export-transactions', exportTransactionsExcel);
+router.get('/export-transactions-range', exportTransactionsByRange);
 router.get('/listings', manageListings);
 router.get('/promoted-listings', getPromotedListings);
 router.get('/users', getAllUsers);
 router.get('/creator-requests', getCreatorRequests);
 router.get('/export-users', exportUsersExcel);
+router.get('/users/:id', getUserById);
 
 router.post('/categories', createCategory);
-router.post('/tags', upload.single('image'), createTag);
+router.post('/tags', createTag);
 
 router.put('/categories/reorder', updateCategoryOrder);
 
 router.put('/categories/:id', updateCategory);
 router.delete('/categories/:id', deleteCategory);
 
-router.put('/tags/:id', upload.single('image'), updateTag);
+router.put('/tags/:id', updateTag);
 router.delete('/tags/:id', deleteTag);
 
 router.put('/approve-creator/:userId', approveCreator);
