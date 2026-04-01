@@ -9,6 +9,7 @@ import adminRoutes from './routes/adminRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import creatorRoutes from './routes/creatorRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
+import sliderRoutes from './routes/sliderRoutes.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -26,15 +27,18 @@ app.use(
 
 app.use(cookieParser());
 
+// Stripe Webhook এর জন্য এটি json() এর উপরে থাকা ভালো
 app.use('/api/payments', paymentRoutes);
 
 app.use(express.json());
 
+// Routes
 app.use('/api/users', userRoutes);
 app.use('/api/creator', creatorRoutes);
 app.use('/api/listings', listingRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/audit', auditRoutes);
+app.use('/api/sliders', sliderRoutes);
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
