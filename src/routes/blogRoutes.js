@@ -1,28 +1,30 @@
 import express from 'express';
+const router = express.Router();
+import upload from '../config/multer.js'; // আপনার দেওয়া multer config
+import { protect, admin } from '../middleware/authMiddleware.js'; // আপনার মিডলওয়্যার
 import {
   createBlog,
-  getAllBlogs,
+  getBlogs,
   getBlogById,
   updateBlog,
   deleteBlog,
 } from '../controllers/blogController.js';
-import { createComment, getBlogComments, deleteComment } from '../controllers/commentController.js';
-import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
+import {
+  createComment,
+  getCommentsByBlog,
+  deleteComment,
+} from '../controllers/commentController.js';
 
-const router = express.Router();
+// --- BLOG ROUTES ---
+router.get('/', getBlogs);
+router.get('/:id', getBlogById);
+router.post('/', protect, admin, upload.single('image'), createBlog);
+router.put('/:id', protect, admin, upload.single('image'), updateBlog);
+router.delete('/:id', protect, admin, deleteBlog);
 
-// --- Blog Routes ---
-router.get('/', getAllBlogs); // public
-router.get('/:id', getBlogById); // public
-
-// Admin blog management routes
-router.post('/', authMiddleware, authorizeRoles('admin'), createBlog);
-router.put('/:id', authMiddleware, authorizeRoles('admin'), updateBlog);
-router.delete('/:id', authMiddleware, authorizeRoles('admin'), deleteBlog);
-
-// --- Comment Routes ---
-router.get('/:blogId/comments', getBlogComments); // public
-router.post('/comments', authMiddleware, createComment); 
-router.delete('/comments/:id', authMiddleware, deleteComment); 
+// --- COMMENT ROUTES ---
+router.get('/:blogId/comments', getCommentsByBlog);
+router.post('/comments', protect, createComment); // User and Admin both can use this
+router.delete('/comments/:id', protect, deleteComment); // Security logic handled in controller
 
 export default router;
