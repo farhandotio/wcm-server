@@ -18,8 +18,8 @@ import {
 // --- BLOG ROUTES ---
 router.get('/', getBlogs);
 router.get('/:id', getBlogById);
-router.post('/', authMiddleware, authorizeRoles('admin'), upload.single('image'), createBlog);
-router.put('/:id', authMiddleware, authorizeRoles('admin'), upload.single('image'), updateBlog);
+router.post('/', authMiddleware, authorizeRoles('admin'), upload.any(), createBlog);
+router.put('/:id', authMiddleware, authorizeRoles('admin'), upload.any(), updateBlog);
 router.delete('/:id', authMiddleware, authorizeRoles('admin'), deleteBlog);
 
 // --- COMMENT ROUTES ---

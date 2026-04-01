@@ -4,31 +4,85 @@ import Comment from '../models/Comment.js';
 // --- ADMIN ONLY: Create Blog ---
 export const createBlog = async (req, res) => {
   try {
-    const { category, title, authorName, authorRole, authorImage, tags, description, content } =
-      req.body;
+    const { category, title, tags, description, content } = req.body;
 
-    if (!req.file) return res.status(400).json({ message: 'Main banner image is required' });
+    // ১. মেইন ব্যানার চেক (req.files এ 'image' ফিল্ড চেক করা হচ্ছে)
+    const mainBanner = req.files.find((file) => file.fieldname === 'image');
+    if (!mainBanner) return res.status(400).json({ message: 'Main banner image is required' });
 
-    // parse strings to arrays if they come as strings from multipart/form-data
+    // ২. ডাটা পার্স করা
     const parsedTags = typeof tags === 'string' ? tags.split(',').map((t) => t.trim()) : tags;
-    const parsedContent = typeof content === 'string' ? JSON.parse(content) : content;
+    let parsedContent = typeof content === 'string' ? JSON.parse(content) : content;
+
+    // ৩. ডাইনামিক গ্রিড ইমেজ প্রসেসিং
+    // ফ্রন্টেন্ড থেকে gridImages_0, gridImages_1 এভাবে ডাটা আসছে
+    if (req.files && Array.isArray(parsedContent)) {
+      parsedContent = parsedContent.map((block, index) => {
+        if (block.type === 'image_grid') {
+          const fieldName = `gridImages_${index}`;
+          // এই ব্লকের জন্য যতগুলো ইমেজ আপলোড হয়েছে তাদের Cloudinary URL বের করা
+          const gridImages = req.files
+            .filter((file) => file.fieldname === fieldName)
+            .map((file) => file.path);
+
+          return { ...block, images: gridImages };
+        }
+        return block;
+      });
+    }
+
+    // ৪. অ্যাডমিন প্রোফাইল থেকে অথর ইনফো নেয়া
+    const admin = req.user;
 
     const newBlog = await Blog.create({
       category,
       title,
       author: {
-        name: authorName,
-        role: authorRole,
-        image: authorImage, // Author photo could be a static URL or another upload
+        name: `${admin.firstName} ${admin.lastName}`,
+        role: 'Editorial Team', // বা admin.role
+        image: admin.profile?.profileImage || 'https://i.postimg.cc/ncFFN2XS/image-(22).jpg',
       },
-      image: req.file.path, // Cloudinary URL from Multer
+      image: mainBanner.path, // Cloudinary Main URL
       tags: parsedTags,
       description,
       content: parsedContent,
-      createdBy: req.user._id,
+      createdBy: admin._id,
     });
 
     res.status(201).json({ success: true, blog: newBlog });
+  } catch (error) {
+    console.error('Blog Create Error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// --- ADMIN ONLY: Update/Delete Blog ---
+export const updateBlog = async (req, res) => {
+  try {
+    let updateData = { ...req.body };
+
+    // মেইন ইমেজ আপডেট
+    const mainBanner = req.files?.find((file) => file.fieldname === 'image');
+    if (mainBanner) updateData.image = mainBanner.path;
+
+    // কন্টেন্ট পার্স এবং গ্রিড ইমেজ আপডেট
+    if (req.body.content) {
+      let parsedContent = JSON.parse(req.body.content);
+      if (req.files) {
+        parsedContent = parsedContent.map((block, index) => {
+          const fieldName = `gridImages_${index}`;
+          const newImages = req.files.filter((f) => f.fieldname === fieldName).map((f) => f.path);
+          if (newImages.length > 0) {
+            return { ...block, images: [...(block.images || []), ...newImages] };
+          }
+          return block;
+        });
+      }
+      updateData.content = parsedContent;
+    }
+
+    const updatedBlog = await Blog.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    res.status(200).json({ success: true, blog: updatedBlog });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -61,19 +115,6 @@ export const getBlogById = async (req, res) => {
     const blog = await Blog.findById(req.params.id);
     if (!blog) return res.status(404).json({ message: 'Blog not found' });
     res.status(200).json({ success: true, blog });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// --- ADMIN ONLY: Update/Delete Blog ---
-export const updateBlog = async (req, res) => {
-  try {
-    const updateData = { ...req.body };
-    if (req.file) updateData.image = req.file.path;
-
-    const updatedBlog = await Blog.findByIdAndUpdate(req.params.id, updateData, { new: true });
-    res.status(200).json({ success: true, blog: updatedBlog });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
