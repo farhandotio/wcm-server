@@ -13,6 +13,8 @@ import {
   getFamousCreators,
   getTopCreatorsWithDropdown,
   getModerationReasons,
+  resetPassword,
+  forgotPassword,
 } from '../controllers/userController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
@@ -61,5 +63,8 @@ router.post(
   ]),
   becomeCreator
 );
+
+router.post('/forgot-password', forgotPassword);
+router.put('/reset-password/:token', resetPassword);
 
 export default router;

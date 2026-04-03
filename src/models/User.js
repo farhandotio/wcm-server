@@ -97,6 +97,8 @@ const userSchema = new mongoose.Schema(
       data: { type: Object },
     },
     listingsCount: { type: Number, default: 0 },
+    resetPasswordToken: String,
+    resetPasswordExpire: Date,
   },
   { timestamps: true }
 );
