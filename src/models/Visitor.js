@@ -7,7 +7,7 @@ const visitorSchema = new mongoose.Schema(
     device: String,
     os: String,
     country: { type: String, default: 'Unknown' },
-    city: { type: String, default: 'Unknown' }, 
+    city: { type: String, default: 'Unknown' },
     visitCount: { type: Number, default: 1 },
     lastVisited: { type: Date, default: Date.now },
   },

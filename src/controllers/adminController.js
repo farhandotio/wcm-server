@@ -1083,8 +1083,8 @@ export const getAdminStats = async (req, res) => {
       recentPaymentsCount,
       allSuccessfulTopups,
       globalAnalytics,
-      auditTotals,
       siteTraffic,
+      auditTotals,
     ] = await Promise.all([
       User.countDocuments({ role: 'creator' }),
       Listing.countDocuments({ status: 'pending' }),
