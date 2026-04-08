@@ -11,7 +11,11 @@ import creatorRoutes from './routes/creatorRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import sliderRoutes from './routes/sliderRoutes.js';
 import blogRoutes from './routes/blogRoutes.js';
+<<<<<<< HEAD
 import viewsRoutes from './routes/viewsRoutes.js';
+=======
+import faqRoutes from './routes/faqRoutes.js';
+>>>>>>> 98d87de4ca87763587f610db1313f18966fe29ec
 
 const app = express();
 app.set('trust proxy', 1);
@@ -42,7 +46,11 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/sliders', sliderRoutes);
 app.use('/api/blogs', blogRoutes);
+<<<<<<< HEAD
 app.use('/api/views', viewsRoutes);
+=======
+app.use('/api/faqs', faqRoutes);
+>>>>>>> 98d87de4ca87763587f610db1313f18966fe29ec
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
