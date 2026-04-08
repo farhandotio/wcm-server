@@ -10,6 +10,7 @@ import Analytics from '../models/Analytics.js';
 import { SystemSettings } from '../models/SystemSettings.js';
 import AuditLog from '../models/AuditLog.js';
 import mongoose from 'mongoose';
+import Visitor from '../models/Visitor.js';
 
 export const createTag = async (req, res) => {
   try {
@@ -889,7 +890,7 @@ export const exportTransactionsByRange = async (req, res) => {
 
     worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEA580C' } };
 
-    transactions.forEach(tx => {
+    transactions.forEach((tx) => {
       worksheet.addRow({
         date: tx.createdAt.toISOString().split('T')[0],
         invoice: tx.invoiceNumber,
@@ -900,8 +901,14 @@ export const exportTransactionsByRange = async (req, res) => {
       });
     });
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=Transactions_${startDate}_to_${endDate}.xlsx`);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=Transactions_${startDate}_to_${endDate}.xlsx`
+    );
 
     await workbook.xlsx.write(res);
     res.end();
@@ -1077,6 +1084,7 @@ export const getAdminStats = async (req, res) => {
       allSuccessfulTopups,
       globalAnalytics,
       auditTotals,
+      siteTraffic,
     ] = await Promise.all([
       User.countDocuments({ role: 'creator' }),
       Listing.countDocuments({ status: 'pending' }),
@@ -1090,7 +1098,15 @@ export const getAdminStats = async (req, res) => {
       Analytics.aggregate([
         { $group: { _id: null, totalViews: { $sum: '$views' }, totalClicks: { $sum: '$clicks' } } },
       ]),
-      // AuditLog থেকে PPC এবং Boost এর আয় বের করা
+      Visitor.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalSiteViews: { $sum: '$visitCount' },
+            uniqueVisitors: { $count: {} },
+          },
+        },
+      ]),
       AuditLog.aggregate([
         {
           $match: {
@@ -1188,6 +1204,8 @@ export const getAdminStats = async (req, res) => {
         totalVat: totalVat.toFixed(2),
         activePromotions: activePromotionsCount,
         recentPayments: recentPaymentsCount,
+        totalSiteViews: siteTraffic[0]?.totalSiteViews || 0, 
+        uniqueVisitors: siteTraffic[0]?.uniqueVisitors || 0,
         totalViews: globalAnalytics[0]?.totalViews || 0,
         totalClicks: globalAnalytics[0]?.totalClicks || 0,
         pendingListings,

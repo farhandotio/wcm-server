@@ -11,6 +11,7 @@ import creatorRoutes from './routes/creatorRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import sliderRoutes from './routes/sliderRoutes.js';
 import blogRoutes from './routes/blogRoutes.js';
+import viewsRoutes from './routes/viewsRoutes.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -41,6 +42,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/sliders', sliderRoutes);
 app.use('/api/blogs', blogRoutes);
+app.use('/api/views', viewsRoutes);
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
