@@ -17,6 +17,7 @@ const REASON_CODES = [
 
 const listingSchema = new mongoose.Schema(
   {
+    slug: { type: String, required: true, unique: true, trim: true },
     creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     title: { type: String, required: true, trim: true },
     description: { type: String, required: true, trim: true },

@@ -10,6 +10,7 @@ import Analytics from '../models/Analytics.js';
 import InteractionLog from '../models/InteractionLog.js';
 import { createAuditLog } from '../utils/logger.js';
 import { applyPromotionLogic, resetPPC } from '../utils/promotionHelper.js';
+import slugify from 'slugify';
 
 export const handlePpcClick = async (req, res) => {
   try {
@@ -192,6 +193,8 @@ export const createListing = async (req, res) => {
       return res.status(400).json({ message: 'Please upload an image' });
     }
 
+    const generatedSlug = `${slugify(title, { lower: true, strict: true })}-${Date.now()}`;
+
     const imageUrl = req.file.path;
 
     let urlList = [];
@@ -216,6 +219,7 @@ export const createListing = async (req, res) => {
 
     const newListing = await Listing.create({
       creatorId: req.user._id,
+      slug: generatedSlug,
       title,
       description,
       externalUrls: urlList,
@@ -444,14 +448,19 @@ export const getListingById = async (req, res) => {
     const userId = req.user?._id;
     const userAgent = req.headers['user-agent'] || 'unknown';
 
-    const listing = await Listing.findById(id)
+    const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { slug: id };
+
+    // ২. লিস্টিং খোঁজা
+    const listing = await Listing.findOne(query)
       .populate('creatorId', 'firstName lastName username profile.profileImage')
       .populate('category', 'title')
       .populate('culturalTags', 'title image');
 
     if (!listing) return res.status(404).json({ success: false, message: 'Listing not found' });
 
-    const viewQuery = { listingId: id, type: 'view' };
+    const actualListingId = listing._id;
+
+    const viewQuery = { listingId: actualListingId, type: 'view' };
     if (userId) {
       viewQuery.userId = userId;
     } else if (deviceId) {
@@ -463,10 +472,10 @@ export const getListingById = async (req, res) => {
     const alreadyViewed = await InteractionLog.findOne(viewQuery);
 
     if (!alreadyViewed) {
-      await Listing.findByIdAndUpdate(id, { $inc: { views: 1 } });
+      await Listing.findByIdAndUpdate(actualListingId, { $inc: { views: 1 } });
 
       await InteractionLog.create({
-        listingId: id,
+        listingId: actualListingId,
         userId: userId || null,
         deviceId: deviceId || 'guest_device',
         type: 'view',
@@ -475,7 +484,7 @@ export const getListingById = async (req, res) => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       await Analytics.findOneAndUpdate(
-        { listingId: id, date: today },
+        { listingId: actualListingId, date: today },
         {
           $inc: { views: 1 },
           $setOnInsert: { creatorId: listing.creatorId?._id || listing.creatorId },
@@ -489,6 +498,59 @@ export const getListingById = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// export const getListingById = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { deviceId } = req.query;
+//     const userId = req.user?._id;
+//     const userAgent = req.headers['user-agent'] || 'unknown';
+
+//     const listing = await Listing.findById(id)
+//       .populate('creatorId', 'firstName lastName username profile.profileImage')
+//       .populate('category', 'title')
+//       .populate('culturalTags', 'title image');
+
+//     if (!listing) return res.status(404).json({ success: false, message: 'Listing not found' });
+
+//     const viewQuery = { listingId: id, type: 'view' };
+//     if (userId) {
+//       viewQuery.userId = userId;
+//     } else if (deviceId) {
+//       viewQuery.deviceId = deviceId;
+//     } else {
+//       viewQuery.userAgent = userAgent;
+//     }
+
+//     const alreadyViewed = await InteractionLog.findOne(viewQuery);
+
+//     if (!alreadyViewed) {
+//       await Listing.findByIdAndUpdate(id, { $inc: { views: 1 } });
+
+//       await InteractionLog.create({
+//         listingId: id,
+//         userId: userId || null,
+//         deviceId: deviceId || 'guest_device',
+//         type: 'view',
+//       });
+
+//       const today = new Date();
+//       today.setHours(0, 0, 0, 0);
+//       await Analytics.findOneAndUpdate(
+//         { listingId: id, date: today },
+//         {
+//           $inc: { views: 1 },
+//           $setOnInsert: { creatorId: listing.creatorId?._id || listing.creatorId },
+//         },
+//         { upsert: true }
+//       );
+//     }
+
+//     res.status(200).json(listing);
+//   } catch (error) {
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// };
 
 export const getCreatorListingCount = async (req, res) => {
   try {
