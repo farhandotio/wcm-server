@@ -2,6 +2,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import cors from 'cors';
+import { globalLimiter } from './utils/rateLimiter.js';
 
 import userRoutes from './routes/userRoutes.js';
 import listingRoutes from './routes/listingRoutes.js';
@@ -29,6 +30,8 @@ app.use(
 );
 
 app.use(cookieParser());
+
+app.use(globalLimiter);
 
 // Stripe Webhook এর জন্য এটি json() এর উপরে থাকা ভালো
 app.use('/api/payments', paymentRoutes);
