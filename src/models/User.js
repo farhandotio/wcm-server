@@ -13,7 +13,6 @@ const REASON_CODES = [
   'NOT_RELEVANT_TO_OUR_BUSINESS_MODEL',
 ];
 
-
 const userSchema = new mongoose.Schema(
   {
     firstName: { type: String, required: true, trim: true },
