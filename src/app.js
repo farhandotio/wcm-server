@@ -14,6 +14,7 @@ import sliderRoutes from './routes/sliderRoutes.js';
 import blogRoutes from './routes/blogRoutes.js';
 import viewsRoutes from './routes/viewsRoutes.js';
 import faqRoutes from './routes/faqRoutes.js';
+import seoRoutes from './routes/seoRoutes.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -48,6 +49,7 @@ app.use('/api/sliders', sliderRoutes);
 app.use('/api/blogs', blogRoutes);
 app.use('/api/views', viewsRoutes);
 app.use('/api/faqs', faqRoutes);
+app.use('/api/seo', seoRoutes);
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
