@@ -5,13 +5,14 @@ const seoSettingSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
-        // কোন কোন পেজের SEO অ্যাডমিন থেকে কন্ট্রোল করা যাবে
-        enum: ['home', 'about', 'contact', 'explore']
+        // এখানে 'faq' যোগ করা হয়েছে
+        enum: ['home', 'about', 'contact', 'explore', 'blog', 'faq', 'creators','how-it-works']
     },
     title: { type: String, required: true },
     description: { type: String, required: true },
     keywords: [String],
 }, { timestamps: true });
 
-const SeoSetting = mongoose.model('SeoSetting', seoSettingSchema);
+// মডেল এক্সপোর্ট করার আগে চেক করে নেওয়া ভালো যেন বারবার মডেল ক্রিয়েট না হয়
+const SeoSetting = mongoose.models.SeoSetting || mongoose.model('SeoSetting', seoSettingSchema);
 export default SeoSetting;
