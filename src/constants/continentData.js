@@ -1,5 +1,5 @@
 export const continentMapping = {
-    asia: [
+    "asia": [
         "Afghanistan", "Armenia", "Azerbaijan", "Bangladesh", "Bhutan", "Brunei", "Cambodia", "China",
         "Georgia", "India", "Indonesia", "Japan", "Kazakhstan", "Kyrgyzstan", "Laos", "Malaysia",
         "Maldives", "Mongolia", "Myanmar", "Nepal", "North Korea", "Pakistan", "Philippines",
@@ -7,12 +7,12 @@ export const continentMapping = {
         "Turkmenistan", "Uzbekistan", "Vietnam"
     ],
 
-    middleeast: [
+    "middle-east": [
         "Bahrain", "Cyprus", "Iran", "Iraq", "Israel", "Jordan", "Kuwait", "Lebanon", "Oman",
         "Palestine", "Qatar", "Saudi Arabia", "Syria", "Turkey", "United Arab Emirates", "Yemen"
     ],
 
-    europe: [
+    "europe": [
         "Albania", "Andorra", "Austria", "Belarus", "Belgium", "Bosnia and Herzegovina", "Bulgaria",
         "Croatia", "Czech Republic", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece",
         "Hungary", "Iceland", "Ireland", "Italy", "Kosovo", "Latvia", "Liechtenstein", "Lithuania",
@@ -21,7 +21,7 @@ export const continentMapping = {
         "Slovenia", "Spain", "Sweden", "Switzerland", "Ukraine", "United Kingdom", "Vatican City"
     ],
 
-    africa: [
+    "africa": [
         "Algeria", "Angola", "Benin", "Botswana", "Burkina Faso", "Burundi", "Cape Verde", "Cameroon",
         "Central African Republic", "Chad", "Comoros", "Congo", "DR Congo", "Djibouti", "Egypt",
         "Equatorial Guinea", "Eritrea", "Eswatini", "Ethiopia", "Gabon", "Gambia", "Ghana", "Guinea",
@@ -31,11 +31,11 @@ export const continentMapping = {
         "South Africa", "South Sudan", "Sudan", "Tanzania", "Togo", "Tunisia", "Uganda", "Zambia", "Zimbabwe"
     ],
 
-    northamerica: [
+    "north-america": [
         "Canada", "United States", "Greenland", "Bermuda"
     ],
 
-    latinamerica: [
+    "latin-america": [
         "Antigua and Barbuda", "Argentina", "Bahamas", "Barbados", "Belize", "Bolivia", "Brazil",
         "Chile", "Colombia", "Costa Rica", "Cuba", "Dominica", "Dominican Republic", "Ecuador",
         "El Salvador", "Grenada", "Guatemala", "Guyana", "Haiti", "Honduras", "Jamaica", "Mexico",
@@ -44,7 +44,7 @@ export const continentMapping = {
         "Uruguay", "Venezuela"
     ],
 
-    oceania: [
+    "oceania": [
         "Australia", "Fiji", "Kiribati", "Marshall Islands", "Micronesia", "Nauru", "New Zealand",
         "Palau", "Papua New Guinea", "Samoa", "Solomon Islands", "Tonga", "Tuvalu", "Vanuatu"
     ]
