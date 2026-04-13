@@ -23,8 +23,13 @@ const listingSchema = new mongoose.Schema(
     description: { type: String, required: true, trim: true },
     externalUrls: [{ type: String, trim: true }],
     websiteLink: { type: String, trim: true },
-    region: { type: String, required: true },
+    continent: {
+      type: String,
+      required: true,
+    },
     country: { type: String, required: true },
+    region: { type: String, required: true },
+
     tradition: { type: String, required: true },
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
     culturalTags: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Tag' }],
@@ -36,7 +41,7 @@ const listingSchema = new mongoose.Schema(
     rejectionReason: {
       type: String,
       enum: {
-        values: [...REASON_CODES, ''], 
+        values: [...REASON_CODES, ''],
         message: '{VALUE} is not a valid reason code',
       },
       default: '',
@@ -69,15 +74,20 @@ const listingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Indexes
+// --- Indexes ---
 listingSchema.index({ status: 1, rejectionReason: 1 });
+
 listingSchema.index({
   title: 'text',
   description: 'text',
   country: 'text',
   region: 'text',
+  continent: 'text',
   tradition: 'text',
 });
+
+listingSchema.index({ continent: 1 });
+
 listingSchema.index({ isPromoted: 1 });
 listingSchema.index({ status: 1 });
 

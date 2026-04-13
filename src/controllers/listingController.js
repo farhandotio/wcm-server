@@ -11,6 +11,7 @@ import InteractionLog from '../models/InteractionLog.js';
 import { createAuditLog } from '../utils/logger.js';
 import { applyPromotionLogic, resetPPC } from '../utils/promotionHelper.js';
 import slugify from 'slugify';
+import { continentMapping } from '../constants/continentData.js';
 
 export const handlePpcClick = async (req, res) => {
   try {
@@ -175,6 +176,15 @@ export const getCategoriesAndTags = async (req, res) => {
   }
 };
 
+const getContinentByCountry = (countryName) => {
+  for (const [continent, countries] of Object.entries(continentMapping)) {
+    if (countries.includes(countryName)) {
+      return continent;
+    }
+  }
+  return 'Other'; // যদি লিস্টে না পাওয়া যায়
+};
+
 export const createListing = async (req, res) => {
   try {
     const {
@@ -182,8 +192,8 @@ export const createListing = async (req, res) => {
       description,
       externalUrls,
       websiteLink,
-      region,
-      country,
+      region,   // এটি হয়তো আপনার লোকাল কোনো রিজিয়ন
+      country,  // ফ্রন্টএন্ড থেকে আসা দেশের নাম
       tradition,
       category,
       culturalTags,
@@ -193,30 +203,35 @@ export const createListing = async (req, res) => {
       return res.status(400).json({ message: 'Please upload an image' });
     }
 
-    const generatedSlug = `${slugify(title, { lower: true, strict: true })}-${Date.now()}`;
+    // --- মহাদেশ বের করার লজিক ---
+    const continent = getContinentByCountry(country);
 
+    const generatedSlug = `${slugify(title, { lower: true, strict: true })}-${Date.now()}`;
     const imageUrl = req.file.path;
 
+    // URL লিস্ট প্রসেসিং
     let urlList = [];
     if (externalUrls) {
       urlList = Array.isArray(externalUrls)
         ? externalUrls
         : externalUrls
-            .split(',')
-            .map((url) => url.trim())
-            .filter((url) => url !== '');
+          .split(',')
+          .map((url) => url.trim())
+          .filter((url) => url !== '');
     }
 
+    // ট্যাগ আইডি প্রসেসিং
     let tagIds = [];
     if (culturalTags) {
       tagIds = Array.isArray(culturalTags)
         ? culturalTags
         : culturalTags
-            .split(',')
-            .map((t) => t.trim())
-            .filter((t) => t !== '');
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t !== '');
     }
 
+    // নতুন লিস্টিং তৈরি (এখন continent ফিল্ডসহ)
     const newListing = await Listing.create({
       creatorId: req.user._id,
       slug: generatedSlug,
@@ -224,6 +239,7 @@ export const createListing = async (req, res) => {
       description,
       externalUrls: urlList,
       websiteLink,
+      continent, // এখানে অটোমেটিক মহাদেশ সেভ হচ্ছে
       region,
       country,
       tradition,
@@ -232,13 +248,17 @@ export const createListing = async (req, res) => {
       image: imageUrl,
     });
 
+    // ইউজারের লিস্টিং কাউন্ট আপডেট
     const actualCount = await Listing.countDocuments({ creatorId: req.user._id });
-
     await User.findByIdAndUpdate(req.user._id, {
       listingsCount: actualCount,
     });
 
-    res.status(201).json({ message: 'Listing created successfully', newListing });
+    res.status(201).json({
+      message: 'Listing created successfully',
+      newListing
+    });
+
   } catch (error) {
     console.error('Create Error:', error);
     res.status(500).json({ message: error.message });
@@ -264,9 +284,9 @@ export const updateListing = async (req, res) => {
       tags = Array.isArray(updateData.culturalTags)
         ? updateData.culturalTags
         : updateData.culturalTags
-            .split(',')
-            .map((t) => t.trim())
-            .filter((t) => t !== '');
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t !== '');
 
       if (tags.length > 5) {
         return res.status(400).json({ message: 'Maximum 5 cultural tags allowed' });
@@ -316,35 +336,51 @@ export const updateListing = async (req, res) => {
 
 export const getPublicListings = async (req, res) => {
   try {
-    const { filter, search, category, region, tradition, creatorId, limit, page, offset } =
-      req.query;
+    const {
+      filter, search, category, continent, tradition,
+      creatorId, limit, page, offset
+    } = req.query;
 
     let query = { status: 'approved' };
 
+    // ১. ক্যাটাগরি ফিল্টার (ID অথবা SEO Slug সাপোর্ট)
     if (category && category !== 'All' && category !== 'undefined') {
       if (mongoose.Types.ObjectId.isValid(category)) {
         query.category = category;
       } else {
+        // 'pottery-art' কে 'pottery art' বানিয়ে কেস-ইনসেনসিটিভ সার্চ
+        const categoryTitle = category.replace(/-/g, ' ');
         const foundCategory = await Category.findOne({
-          title: { $regex: category, $options: 'i' },
+          title: { $regex: new RegExp(`^${categoryTitle}$`, 'i') },
         });
+
         if (foundCategory) {
           query.category = foundCategory._id;
         } else {
+          // ক্যাটাগরি না পাওয়া গেলে একটি রেন্ডম আইডি বসানো যেন রেজাল্ট খালি আসে
           query.category = new mongoose.Types.ObjectId();
         }
       }
     }
 
-    if (region && region !== 'All') query.region = region;
+    // ২. কন্টিনেন্ট (মহাদেশ) ফিল্টার - [পরিবর্তিত অংশ]
+    // এখন আমরা সরাসরি ডাটাবেজের 'continent' ফিল্ডে সার্চ করবো
+    if (continent && continent !== 'All' && continent !== 'All Regions' && continent !== 'undefined') {
+      // যদি স্লাগ আকারে আসে (যেমন: asia-pacific) তবে স্পেস করে দেব
+      const continentName = continent.replace(/-/g, ' ');
+      // সরাসরি 'continent' ফিল্ডে কেস-ইনসেনসিটিভ সার্চ
+      query.continent = { $regex: new RegExp(`^${continentName}$`, 'i') };
+    }
+
+    // ৩. ট্র্যাডিশন ফিল্টার
     if (tradition && tradition !== 'All') {
       query.tradition = { $regex: tradition, $options: 'i' };
     }
 
+    // ৪. ডেট ফিল্টার (Today / This week)
     const now = new Date();
     if (filter === 'Today') {
-      const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
+      const startOfDay = new Date(now.setHours(0, 0, 0, 0));
       query.createdAt = { $gte: startOfDay };
     } else if (filter === 'This week') {
       const startOfWeek = new Date();
@@ -355,90 +391,92 @@ export const getPublicListings = async (req, res) => {
 
     if (creatorId) query.creatorId = creatorId;
 
+    // ৫. সার্চ লজিক - [এখানেও continent যোগ করা হয়েছে]
     if (search) {
+      const searchRegex = { $regex: search, $options: 'i' };
+
       const [matchingTags, matchingCategories] = await Promise.all([
-        Tag.find({ title: { $regex: search, $options: 'i' } })
-          .select('_id')
-          .lean(),
-        Category.find({ title: { $regex: search, $options: 'i' } })
-          .select('_id')
-          .lean(),
+        Tag.find({ title: searchRegex }).distinct('_id'),
+        Category.find({ title: searchRegex }).distinct('_id'),
       ]);
-      const tagIds = matchingTags.map((t) => t._id);
-      const catIds = matchingCategories.map((c) => c._id);
 
       query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { country: { $regex: search, $options: 'i' } },
-        { region: { $regex: search, $options: 'i' } },
-        { culturalTags: { $in: tagIds } },
-        { category: { $in: catIds } },
+        { title: searchRegex },
+        { description: searchRegex },
+        { country: searchRegex },
+        { continent: searchRegex },
+        { culturalTags: { $in: matchingTags } },
+        { category: { $in: matchingCategories } },
       ];
     }
+  
 
+    // ৬. পেজিনেশন ও স্কিপ লজিক
     const resPerPage = parseInt(limit) || 10;
-    const skip = offset ? parseInt(offset) : resPerPage * (parseInt(page || 1) - 1);
+  const skip = offset ? parseInt(offset) : resPerPage * (parseInt(page || 1) - 1);
 
-    let listings = await Listing.find(query)
-      .populate('creatorId', 'username profile listingsCount') // listingsCount পপুলেট করা হলো
-      .populate('category', 'title')
-      .populate('culturalTags', 'title image')
-      .sort({
-        isPromoted: -1,
-        'promotion.level': -1,
-        views: -1,
-        createdAt: -1,
-      })
-      .limit(resPerPage)
-      .skip(skip)
-      .lean();
+  // ৭. লিস্টিং ফেচিং
+  let listings = await Listing.find(query)
+    .populate('creatorId', 'username profile listingsCount')
+    .populate('category', 'title')
+    .populate('culturalTags', 'title image')
+    .sort({
+      isPromoted: -1,
+      'promotion.level': -1,
+      views: -1,
+      createdAt: -1,
+    })
+    .limit(resPerPage)
+    .skip(skip)
+    .lean();
 
-    const totalListings = await Listing.countDocuments(query);
-    const currentUserId = req.user ? req.user._id.toString() : null;
+  const totalListings = await Listing.countDocuments(query);
+  const currentUserId = req.user ? req.user._id.toString() : null;
 
-    const formattedListings = await Promise.all(
-      listings.map(async (item) => {
-        const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
+  // ৮. ডাটা ফরম্যাটিং ও এডিশনাল স্ট্যাটস
+  const formattedListings = await Promise.all(
+    listings.map(async (item) => {
+      const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
 
-        // ক্রিয়েটরের আরও কতগুলো একটিভ লিস্টিং আছে তা বের করা
-        // (যদি প্রোফাইলে সরাসরি listingsCount না থাকে তবে সরাসরি কাউন্ট করা)
-        const creatorActiveListings = await Listing.countDocuments({
-          creatorId: item.creatorId?._id,
-          status: 'approved',
-        });
+      // ক্রিয়েটরের একটিভ লিস্টিং কাউন্ট করা
+      const creatorActiveListings = await Listing.countDocuments({
+        creatorId: item.creatorId?._id,
+        status: 'approved',
+      });
 
-        const effectiveIsPromoted =
-          (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
-          (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+      const effectiveIsPromoted =
+        (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
+        (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
 
-        return {
-          ...item,
-          isPromoted: effectiveIsPromoted,
-          isFavorited: currentUserId
-            ? safeFavorites.some((favId) => favId.toString() === currentUserId)
-            : false,
-          favoritesCount: safeFavorites.length,
-          creatorStats: {
-            totalApprovedListings: creatorActiveListings,
-          },
-        };
-      })
-    );
+      return {
+        ...item,
+        isPromoted: effectiveIsPromoted,
+        isFavorited: currentUserId
+          ? safeFavorites.some((favId) => favId.toString() === currentUserId)
+          : false,
+        favoritesCount: safeFavorites.length,
+        creatorStats: {
+          totalApprovedListings: creatorActiveListings,
+        },
+      };
+    })
+  );
 
-    res.status(200).json({
-      success: true,
-      total: totalListings,
-      count: formattedListings.length,
-      currentPage: parseInt(page) || 1,
-      nextOffset: skip + formattedListings.length,
-      hasMore: skip + formattedListings.length < totalListings,
-      listings: formattedListings,
-    });
-  } catch (error) {
-    console.error('Public Listings Error:', error);
-    res.status(500).json({ success: false, message: 'Server Error' });
-  }
+  // ৯. ফাইনাল রেসপন্স
+  res.status(200).json({
+    success: true,
+    total: totalListings,
+    count: formattedListings.length,
+    currentPage: parseInt(page) || 1,
+    nextOffset: skip + formattedListings.length,
+    hasMore: skip + formattedListings.length < totalListings,
+    listings: formattedListings,
+  });
+
+} catch (error) {
+  console.error('Public Listings Error:', error);
+  res.status(500).json({ success: false, message: 'Server Error' });
+}
 };
 
 export const getListingById = async (req, res) => {
