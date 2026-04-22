@@ -13,10 +13,8 @@ import {
   applyPromotionLogic,
   checkAndCleanupExpiry,
 } from '../utils/promotionHelper.js';
-import { calculateVAT } from '../utils/vatHelper.js'; 
+import { calculateVAT } from '../utils/vatHelper.js';
 import AuditLog from '../models/AuditLog.js';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const getExchangeRate = async (fromCurrency, toCurrency) => {
   try {
@@ -34,146 +32,14 @@ const getExchangeRate = async (fromCurrency, toCurrency) => {
   }
 };
 
-// export const createCheckoutSession = async (req, res) => {
-//   try {
-//     const { amount, currency } = req.body;
-
-//     if (!amount || amount < 5)
-//       return res.status(400).json({ message: 'Minimum top-up is 5 units.' });
-
-//     const paymentCurrency = (currency || 'eur').toLowerCase();
-
-//     const session = await stripe.checkout.sessions.create({
-//       payment_method_types: ['card'],
-//       line_items: [
-//         {
-//           price_data: {
-//             currency: paymentCurrency,
-//             product_data: {
-//               name: `Wallet Top-up: ${req.user.firstName}`,
-//               description: `Adding funds to your creator wallet`,
-//             },
-//             unit_amount: Math.round(Number(amount) * 100),
-//           },
-//           quantity: 1,
-//         },
-//       ],
-//       mode: 'payment',
-//       success_url: `${process.env.CLIENT_URL}/creator/promotions?success=true`,
-//       cancel_url: `${process.env.CLIENT_URL}/creator/promotions?canceled=true`,
-//       metadata: {
-//         creatorId: req.user._id.toString(),
-//         type: 'wallet_topup',
-//         originalCurrency: paymentCurrency,
-//       },
-//     });
-
-//     res.status(200).json({ url: session.url });
-//   } catch (error) {
-//     res.status(500).json({ message: 'Stripe failed. Try again.' });
-//   }
-// };
-
-// export const handleStripeWebhook = async (req, res) => {
-//   const sig = req.headers['stripe-signature'];
-//   let event;
-
-//   try {
-//     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-//   } catch (err) {
-//     return res.status(400).send(`Webhook Error: ${err.message}`);
-//   }
-
-//   if (event.type === 'checkout.session.completed') {
-//     const session = event.data.object;
-//     const { creatorId, originalCurrency } = session.metadata;
-
-//     const dbSession = await mongoose.startSession();
-//     dbSession.startTransaction();
-
-//     try {
-//       const amountPaid = session.amount_total / 100; // কাস্টমার যা পে করেছে [cite: 8]
-//       let walletCreditInEUR = 0;
-//       let finalVatAmount = 0;
-//       let appliedVatRate = 0;
-
-//       // ১. কারেন্সি ভিত্তিক ভ্যাট এবং কনভার্সন লজিক
-//       if (originalCurrency === 'eur') {
-//         // EUR পেমেন্ট হলে কোনো ভ্যাট নেই
-//         walletCreditInEUR = amountPaid;
-//         appliedVatRate = 0;
-//         finalVatAmount = 0;
-//       } else {
-//         // অন্য কারেন্সি (যেমন USD) হলে এক্সচেঞ্জ রেট এবং ভ্যাট ক্যালকুলেশন [cite: 8, 9]
-//         const fxRate = await getExchangeRate(originalCurrency, 'EUR');
-
-//         // আপনার আগের লজিক অনুযায়ী ভ্যাট ক্যালকুলেশন (যদি USD তে ভ্যাট রাখতে চান) [cite: 8]
-//         // যদি USD তেও ভ্যাট না চান তবে VAT_PERCENT = 0 করে দিন
-//         const VAT_PERCENT = Number(process.env.GLOBAL_VAT_RATE) || 0;
-//         const divisor = 1 + VAT_PERCENT / 100;
-
-//         const amountWithoutVat = amountPaid / divisor;
-//         finalVatAmount = Number((amountPaid - amountWithoutVat).toFixed(2));
-
-//         // EUR এ কনভার্ট করে ওয়ালেটে ক্রেডিট
-//         walletCreditInEUR = Number((amountWithoutVat * fxRate).toFixed(2));
-//       }
-
-//       // ২. ইউজারের ওয়ালেট আপডেট
-//       const updatedUser = await User.findByIdAndUpdate(
-//         creatorId,
-//         { $inc: { walletBalance: walletCreditInEUR } },
-//         { session: dbSession, new: true }
-//       );
-
-//       // ৩. ট্রানজেকশন রেকর্ড তৈরি [cite: 2, 8]
-//       const transaction = await Transaction.create(
-//         [
-//           {
-//             creator: creatorId,
-//             stripeSessionId: session.id,
-//             amountPaid,
-//             currency: originalCurrency.toUpperCase(),
-//             amountInEUR: walletCreditInEUR,
-//             packageType: 'wallet_topup',
-//             status: 'completed',
-//             vatRate: appliedVatRate,
-//             vatAmount: finalVatAmount,
-//             invoiceNumber: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-//           },
-//         ],
-//         { session: dbSession }
-//       );
-
-//       // ৪. অডিট লগ তৈরি
-//       await createAuditLog({
-//         req,
-//         user: creatorId,
-//         action: 'WALLET_TOPUP_SUCCESS',
-//         targetType: 'Transaction',
-//         targetId: transaction[0]._id,
-//         details: {
-//           paidAmount: `${amountPaid} ${originalCurrency.toUpperCase()}`,
-//           creditedEUR: `${walletCreditInEUR} EUR`,
-//           newBalance: `${updatedUser.walletBalance} EUR`,
-//         },
-//       });
-
-//       await dbSession.commitTransaction();
-//       console.log(`Successfully credited ${walletCreditInEUR} EUR to: ${creatorId}`);
-//     } catch (error) {
-//       await dbSession.abortTransaction();
-//       console.error('Webhook processing failed:', error);
-//     } finally {
-//       dbSession.endSession();
-//     }
-//   }
-//   res.json({ received: true });
-// };
-
-
 export const createCheckoutSession = async (req, res) => {
   try {
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+    if (!process.env.STRIPE_SECRET_KEY) {
+      throw new Error('Stripe Secret Key is missing in Environment Variables');
+    }
+
     const { amount, currency } = req.body;
 
     // ১. ইউজার ডাটা চেক
@@ -242,6 +108,8 @@ export const createCheckoutSession = async (req, res) => {
 };
 
 export const handleStripeWebhook = async (req, res) => {
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
   const sig = req.headers['stripe-signature'];
   let event;
 
