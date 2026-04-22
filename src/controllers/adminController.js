@@ -7,10 +7,139 @@ import fs from 'fs';
 import ExcelJS from 'exceljs';
 import Transaction from '../models/Transaction.js';
 import Analytics from '../models/Analytics.js';
-import { SystemSettings } from '../models/SystemSettings.js';
 import AuditLog from '../models/AuditLog.js';
 import mongoose from 'mongoose';
 import Visitor from '../models/Visitor.js';
+import Region from '../models/Region.js';
+import Tradition from '../models/Tradition.js';
+
+// Get Regions by Category
+export const getRegionsByCategory = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const regions = await Region.find({ category: categoryId });
+    res.status(200).json(regions);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+// REGION CONTROLLERS
+export const createRegion = async (req, res) => {
+  try {
+    const { title, categoryId } = req.body;
+    if (!categoryId) return res.status(400).json({ message: 'Category ID is required' });
+
+    const newRegion = await Region.create({ title, category: categoryId });
+    res.status(201).json(newRegion);
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ message: 'Region already exists' });
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getAllRegions = async (req, res) => {
+  try {
+    const regions = await Region.find().populate('category', 'title');
+    res.status(200).json(regions);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateRegion = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedRegion = await Region.findByIdAndUpdate(id, req.body, { new: true });
+    res.status(200).json(updatedRegion);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const deleteRegion = async (req, res) => {
+  try {
+    await Region.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: 'Region deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getTraditionsByCategory = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+
+    // ১. চেক করুন Tradition মডেলটি ইমপোর্ট করা আছে কি না
+    // ২. ফিল্টার করার লজিক ঠিক আছে কি না
+    const traditions = await Tradition.find({ category: categoryId });
+
+    res.status(200).json(traditions);
+  } catch (error) {
+    // এখানে সার্ভার কনসোলে এরর প্রিন্ট হবে, ওটা চেক করুন
+    console.error("Error in getTraditionsByCategory:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// TRADITION CONTROLLERS
+export const createTradition = async (req, res) => {
+  try {
+    const { title, categoryId } = req.body;
+    const newTradition = await Tradition.create({ title, category: categoryId });
+    res.status(201).json(newTradition);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getAllTraditions = async (req, res) => {
+  try {
+    const traditions = await Tradition.find().populate('category', 'title');
+    res.status(200).json(traditions);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateTradition = async (req, res) => {
+  try {
+    const updated = await Tradition.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.status(200).json(updated);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const deleteTradition = async (req, res) => {
+  try {
+    await Tradition.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: 'Tradition deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// CREATOR SPECIAL: GET EVERYTHING BY CATEGORY
+export const getCategoryAssets = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+
+    const [tags, regions, traditions] = await Promise.all([
+      Tag.find({ category: categoryId }),
+      Region.find({ category: categoryId }),
+      Tradition.find({ category: categoryId })
+    ]);
+
+    res.status(200).json({
+      success: true,
+      tags,
+      regions,
+      traditions
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 import {
   invalidateListingCaches,
   invalidateMetaCaches,
@@ -437,7 +566,7 @@ export const manageListings = async (req, res) => {
         ...item,
         creatorName: item.creatorId
           ? `${item.creatorId.firstName || ''} ${item.creatorId.lastName || ''}`.trim() ||
-            item.creatorId.username
+          item.creatorId.username
           : 'Unknown Creator',
         categoryName: item.category?.title || 'Uncategorized',
         ppcStatus: ppcBalance.toFixed(2),
@@ -1108,7 +1237,7 @@ export const getAdminStats = async (req, res) => {
         totalVat: totalVat.toFixed(2),
         activePromotions: activePromotionsCount,
         recentPayments: recentPaymentsCount,
-        totalSiteViews: siteTraffic[0]?.totalSiteViews || 0, 
+        totalSiteViews: siteTraffic[0]?.totalSiteViews || 0,
         uniqueVisitors: siteTraffic[0]?.uniqueVisitors || 0,
         totalViews: globalAnalytics[0]?.totalViews || 0,
         totalClicks: globalAnalytics[0]?.totalClicks || 0,
