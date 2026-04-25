@@ -1,4 +1,6 @@
+import mongoose from 'mongoose';
 import Comment from '../models/Comment.js';
+import Blog from '../models/Blog.js';
 
 export const createComment = async (req, res) => {
   try {
@@ -18,10 +20,41 @@ export const createComment = async (req, res) => {
   }
 };
 
+// export const getCommentsByBlog = async (req, res) => {
+//   try {
+//     // শুধুমাত্র মেইন কমেন্টগুলো আনবে, রিপ্লাইগুলো পপুলেট হবে
+//     const comments = await Comment.find({ blogId: req.params.blogId, parentComment: null })
+//       .populate('user', 'firstName lastName image')
+//       .populate({
+//         path: 'replies',
+//         populate: { path: 'user', select: 'firstName lastName image' },
+//       })
+//       .sort({ createdAt: -1 });
+
+//     res.status(200).json({ success: true, comments });
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
+
+// backend/controllers/commentController.js
+
 export const getCommentsByBlog = async (req, res) => {
   try {
-    // শুধুমাত্র মেইন কমেন্টগুলো আনবে, রিপ্লাইগুলো পপুলেট হবে
-    const comments = await Comment.find({ blogId: req.params.blogId, parentComment: null })
+    const { id } = req.params; // এখানে id-ই আসবে কারণ ফ্রন্টএন্ডে /api/blogs/${id}/comments আছে
+
+    const blogQuery = mongoose.Types.ObjectId.isValid(id) 
+      ? { _id: id } 
+      : { slug: id };
+
+    const blog = await Blog.findOne(blogQuery).select('_id');
+
+    if (!blog) {
+      // এটি ৫০০ নয়, ৪-০-৪ হতে হবে
+      return res.status(404).json({ success: false, message: 'Blog not found' });
+    }
+
+    const comments = await Comment.find({ blogId: blog._id, parentComment: null })
       .populate('user', 'firstName lastName image')
       .populate({
         path: 'replies',

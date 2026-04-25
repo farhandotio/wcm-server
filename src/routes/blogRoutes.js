@@ -23,7 +23,7 @@ router.put('/:id', authMiddleware, authorizeRoles('admin'), upload.any(), update
 router.delete('/:id', authMiddleware, authorizeRoles('admin'), deleteBlog);
 
 // --- COMMENT ROUTES ---
-router.get('/:blogId/comments', getCommentsByBlog);
+router.get('/:id/comments', getCommentsByBlog);
 router.post('/comments', authMiddleware, createComment);
 router.delete('/comments/:id', authMiddleware, deleteComment);
 

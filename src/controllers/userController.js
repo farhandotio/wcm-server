@@ -7,8 +7,15 @@ import Listing from '../models/Listing.js';
 import { validateVatWithVIES } from '../utils/vatHelper.js';
 import slugify from 'slugify';
 import mongoose from 'mongoose';
+import {
+  buildVersionedCacheKey,
+  invalidateListingCaches,
+  invalidateUserProfileCaches,
+  getCache,
+  parseCachedJson,
+  setCache,
+} from '../utils/cache.js';
 
-// ১. Register
 export const registerUser = async (req, res) => {
   try {
     const { firstName, lastName, username, email, password } = req.body;
@@ -36,7 +43,6 @@ export const registerUser = async (req, res) => {
   }
 };
 
-// ২. Login
 export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -79,7 +85,6 @@ export const loginUser = async (req, res) => {
   }
 };
 
-// ৩. Become Creator
 export const becomeCreator = async (req, res) => {
   try {
     const {
@@ -148,6 +153,12 @@ export const becomeCreator = async (req, res) => {
       { new: true, runValidators: true }
     ).select('-password');
 
+    await invalidateUserProfileCaches({
+      id: updatedUser._id,
+      username: updatedUser.username,
+      slug: updatedUser.slug,
+    });
+
     res.status(200).json({
       message: 'Creator application submitted successfully for review.',
       user: updatedUser,
@@ -158,7 +169,6 @@ export const becomeCreator = async (req, res) => {
   }
 };
 
-// ৪. Profile View
 export const getMyProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('-password');
@@ -168,7 +178,6 @@ export const getMyProfile = async (req, res) => {
   }
 };
 
-// ৫. Logout
 export const logoutUser = (req, res) => {
   res.clearCookie('token', {
     httpOnly: true,
@@ -179,7 +188,6 @@ export const logoutUser = (req, res) => {
   res.status(200).json({ message: 'Logged out successfully' });
 };
 
-// ৬. (user update)
 export const updateUserProfile = async (req, res) => {
   try {
     const {
@@ -228,6 +236,12 @@ export const updateUserProfile = async (req, res) => {
       { returnDocument: 'after' }
     ).select('-password');
 
+    await invalidateUserProfileCaches({
+      id: updatedUser._id,
+      username: updatedUser.username,
+      slug: updatedUser.slug,
+    });
+
     res.status(200).json({ message: 'Profile updated successfully', user: updatedUser });
   } catch (error) {
     console.error('Profile Update Error:', error);
@@ -235,7 +249,6 @@ export const updateUserProfile = async (req, res) => {
   }
 };
 
-// ৭. (creator update)
 export const updateCreatorProfile = async (req, res) => {
   try {
     if (req.user.role !== 'creator') {
@@ -271,24 +284,45 @@ export const updateCreatorProfile = async (req, res) => {
       { new: true }
     ).select('-password');
 
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
+
     res.status(200).json({ message: 'Creator profile updated', user });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// ৮. Delete Account
 export const deleteUserAccount = async (req, res) => {
   try {
     const userId = req.user._id;
-
-    await Listing.deleteMany({ creatorId: userId });
 
     const user = await User.findByIdAndDelete(userId);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const deletedListings = await Listing.find({ creatorId: userId }).select('_id slug').lean();
+    await Listing.deleteMany({ creatorId: userId });
+
+    await Promise.all([
+      invalidateUserProfileCaches({
+        id: user._id,
+        username: user.username,
+        slug: user.slug,
+      }),
+      ...deletedListings.map((listing) =>
+        invalidateListingCaches({
+          id: listing._id,
+          slug: listing.slug,
+          creatorId: userId,
+        })
+      ),
+    ]);
 
     res.clearCookie('token', {
       httpOnly: true,
@@ -306,38 +340,18 @@ export const deleteUserAccount = async (req, res) => {
   }
 };
 
-// ৯. Public Profile View
-// export const getPublicProfile = async (req, res) => {
-//   try {
-//     const user = await User.findById(req.params.id)
-//       .select('-password -email -isAdmin -creatorRequest.rejectionReason')
-//       .lean();
-
-//     if (!user) {
-//       return res.status(404).json({ message: 'User identity not found in node' });
-//     }
-
-//     const listingsCount = await Listing.countDocuments({
-//       creatorId: req.params.id,
-//       status: 'approved',
-//     });
-
-//     res.status(200).json({
-//       user,
-//       listingsCount,
-//     });
-//   } catch (error) {
-//     console.error('Public Profile Error:', error);
-//     res.status(500).json({ message: 'Internal Server Error' });
-//   }
-// };
-
 export const getPublicProfile = async (req, res) => {
   try {
     const { id } = req.params;
+    const normalizedId = id.toLowerCase();
+    const cacheKey = `user:profile:${normalizedId}`;
+    const cachedProfile = parseCachedJson(await getCache(cacheKey));
+
+    if (cachedProfile) {
+      return res.status(200).json(cachedProfile);
+    }
 
     let query;
-
     if (mongoose.Types.ObjectId.isValid(id)) {
       query = { _id: id };
     } else {
@@ -359,10 +373,19 @@ export const getPublicProfile = async (req, res) => {
       status: 'approved',
     });
 
-    res.status(200).json({
+    const responseData = {
       user,
       listingsCount,
-    });
+    };
+
+    await Promise.all([
+      setCache(cacheKey, responseData, 3600),
+      setCache(`user:profile:${user._id.toString().toLowerCase()}`, responseData, 3600),
+      setCache(`user:profile:${user.username.toLowerCase()}`, responseData, 3600),
+      user.slug ? setCache(`user:profile:${user.slug.toLowerCase()}`, responseData, 3600) : null,
+    ]);
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Public Profile Error:', error);
     res.status(500).json({ message: 'Internal Server Error' });
@@ -373,6 +396,15 @@ export const getPublicProfile = async (req, res) => {
 export const getFamousCreators = async (req, res) => {
   try {
     const { limit = 10, offset = 0, sortBy = 'listings', search = '', country = '' } = req.query;
+    const cacheKey = await buildVersionedCacheKey(
+      'creators:famous',
+      JSON.stringify({ limit, offset, sortBy, search, country })
+    );
+    const cachedData = parseCachedJson(await getCache(cacheKey));
+
+    if (cachedData) {
+      return res.status(200).json(cachedData);
+    }
 
     const parsedLimit = parseInt(limit);
     const parsedOffset = parseInt(offset);
@@ -460,7 +492,7 @@ export const getFamousCreators = async (req, res) => {
 
     const totalCreators = totalCountData[0]?.total || 0;
 
-    res.status(200).json({
+    const responseData = {
       success: true,
       data: creators,
       pagination: {
@@ -469,7 +501,11 @@ export const getFamousCreators = async (req, res) => {
         offset: parsedOffset,
         hasMore: parsedOffset + parsedLimit < totalCreators,
       },
-    });
+    };
+
+    await setCache(cacheKey, responseData, 600);
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Famous Creators Tactical Error:', error);
     res.status(500).json({ message: 'Internal Server Error' });
@@ -479,6 +515,15 @@ export const getFamousCreators = async (req, res) => {
 export const getTopCreatorsWithDropdown = async (req, res) => {
   try {
     const { search = '', country = '' } = req.query;
+    const cacheKey = await buildVersionedCacheKey(
+      'creators:top30',
+      JSON.stringify({ search, country })
+    );
+    const cachedData = parseCachedJson(await getCache(cacheKey));
+
+    if (cachedData) {
+      return res.status(200).json(cachedData);
+    }
 
     let userQuery = {
       role: 'creator',
@@ -547,7 +592,7 @@ export const getTopCreatorsWithDropdown = async (req, res) => {
       username: c.username,
     }));
 
-    res.status(200).json({
+    const responseData = {
       success: true,
       message: 'Our Top 30 Creators',
       data: {
@@ -555,7 +600,11 @@ export const getTopCreatorsWithDropdown = async (req, res) => {
         dropdownList: restCreators, // বাকিরা ড্রপডাউনের জন্য
         totalCount: allCreators.length,
       },
-    });
+    };
+
+    await setCache(cacheKey, responseData, 600);
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Top Creators Error:', error);
     res.status(500).json({ message: 'Internal Server Error' });
@@ -592,6 +641,11 @@ export const forgotPassword = async (req, res) => {
     user.resetPasswordExpire = Date.now() + 30 * 60 * 1000;
 
     await user.save();
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
 
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
@@ -643,6 +697,11 @@ export const resetPassword = async (req, res) => {
     user.resetPasswordExpire = undefined;
 
     await user.save();
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
 
     res.status(200).json({ success: true, message: 'Password reset successful' });
   } catch (error) {
