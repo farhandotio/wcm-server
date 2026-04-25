@@ -13,7 +13,7 @@ import {
   applyPromotionLogic,
   checkAndCleanupExpiry,
 } from '../utils/promotionHelper.js';
-import { calculateVAT } from '../utils/vatHelper.js'; 
+import { calculateVAT } from '../utils/vatHelper.js';
 import AuditLog from '../models/AuditLog.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);

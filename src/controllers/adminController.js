@@ -437,41 +437,6 @@ export const approveCreator = async (req, res) => {
   }
 };
 
-// export const rejectCreator = async (req, res) => {
-//   try {
-//     const { userId } = req.params;
-//     const { reason, statusType } = req.body;
-
-//     const user = await User.findByIdAndUpdate(
-//       userId,
-//       {
-//         $set: {
-//           'creatorRequest.isApplied': false,
-
-//           'creatorRequest.status': statusType || 'rejected',
-
-//           'creatorRequest.rejectionReason': reason || 'No specific reason provided.',
-
-//           'creatorRequest.adminComment':
-//             statusType === 'needs_review'
-//               ? 'Action required: Please update your profile as requested.'
-//               : 'Final Decision: Application Rejected.',
-//         },
-//       },
-//       { new: true }
-//     ).select('-password');
-
-//     if (!user) return res.status(404).json({ message: 'User not found' });
-
-//     res.status(200).json({
-//       message: `Creator request processed as ${statusType}`,
-//       user,
-//     });
-//   } catch (error) {
-//     res.status(500).json({ message: error.message });
-//   }
-// };
-
 export const rejectCreator = async (req, res) => {
   try {
     const { userId } = req.params;
