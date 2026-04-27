@@ -1,0 +1,67 @@
+// utils/promotionHelper.js
+
+export const resetBoost = (listing) => {
+  listing.promotion.boost.isActive = false;
+  listing.promotion.boost.expiresAt = null;
+  listing.promotion.boost.amountPaid = 0;
+};
+
+export const resetPPC = (listing) => {
+  listing.promotion.ppc.isActive = false;
+  listing.promotion.ppc.ppcBalance = 0;
+  listing.promotion.ppc.amountPaid = 0;
+  listing.promotion.ppc.totalClicks = 0;
+  listing.promotion.ppc.executedClicks = 0;
+};
+
+export const checkAndCleanupExpiry = (listing) => {
+  const now = new Date();
+
+  // ১. বুস্ট এক্সপায়ার চেক
+  if (listing.promotion.boost.isActive && listing.promotion.boost.expiresAt <= now) {
+    resetBoost(listing);
+  }
+
+  // ২. পিপিছি ব্যালেন্স চেক
+  if (
+    listing.promotion.ppc.isActive &&
+    listing.promotion.ppc.ppcBalance < listing.promotion.ppc.costPerClick
+  ) {
+    resetPPC(listing);
+  }
+};
+
+export const applyPromotionLogic = (listing) => {
+  checkAndCleanupExpiry(listing);
+  let boostScore = 0;
+  let ppcScore = 0;
+  const now = new Date();
+
+  if (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) {
+    const totalAmount = listing.promotion.boost.amountPaid || 0;
+    const expiry = new Date(listing.promotion.boost.expiresAt);
+    
+    const timeDiff = expiry.getTime() - now.getTime();
+    const daysRemaining = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)) || 1;
+    
+    boostScore = (totalAmount / Math.max(daysRemaining, 1)) * 10;
+  }
+
+  if (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused) {
+    const cpc = listing.promotion.ppc.costPerClick || 0.1;
+    const balance = listing.promotion.ppc.ppcBalance || 0;
+    ppcScore = (cpc * 100) + (balance * 0.5);
+  }
+
+  listing.promotion.level = Math.floor(boostScore + ppcScore);
+  
+  listing.isPromoted = 
+    (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) || 
+    (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused);
+
+  if (!listing.isPromoted) {
+    listing.promotion.level = 0;
+  }
+
+  return listing;
+};

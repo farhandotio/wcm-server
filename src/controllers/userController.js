@@ -1,31 +1,112 @@
+import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 import User from '../models/User.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import Listing from '../models/Listing.js';
+import { validateVatWithVIES } from '../utils/vatHelper.js';
+import slugify from 'slugify';
+import mongoose from 'mongoose';
+import {
+  buildVersionedCacheKey,
+  invalidateListingCaches,
+  invalidateUserProfileCaches,
+  getCache,
+  parseCachedJson,
+  setCache,
+} from '../utils/cache.js';
+import dns from 'dns/promises';
 
-// ১. Register
 export const registerUser = async (req, res) => {
   try {
     const { firstName, lastName, username, email, password } = req.body;
+
     const userExists = await User.findOne({ $or: [{ email }, { username }] });
     if (userExists) return res.status(400).json({ message: 'User already exists' });
 
+    const slug =
+      slugify(`${firstName} ${lastName}`, { lower: true, strict: true }) +
+      '-' +
+      crypto.randomBytes(4).toString('hex');
+
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Email verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationExpire = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
     const newUser = await User.create({
+      slug,
       firstName,
       lastName,
       username,
       email,
       password: hashedPassword,
       profile: {},
+      isEmailVerified: false,
+      emailVerificationToken: verificationToken,
+      emailVerificationExpire: verificationExpire,
     });
-    res.status(201).json({ message: 'User registered successfully' });
+
+    // Send verification email
+    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"World Culture Marketplace" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Verify your email address',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto;">
+          <h2>Welcome, ${firstName}!</h2>
+          <p>Please verify your email address by clicking the button below. This link expires in <strong>24 hours</strong>.</p>
+          <a href="${verifyUrl}" style="display:inline-block; padding:12px 24px; background:#F57C00; color:#fff; border-radius:8px; text-decoration:none; font-weight:bold;">
+            Verify Email
+          </a>
+          <p style="margin-top:16px; color:#888; font-size:12px;">If you didn't register, ignore this email.</p>
+        </div>
+      `,
+    });
+
+    res.status(201).json({
+      message: 'Registration successful! Please check your email to verify your account.',
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// ২. Login
+export const verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    const user = await User.findOne({
+      emailVerificationToken: token,
+      emailVerificationExpire: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired verification link.' });
+    }
+
+    user.isEmailVerified = true;
+    user.emailVerificationToken = undefined;
+    user.emailVerificationExpire = undefined;
+    await user.save();
+
+    res.status(200).json({ message: 'Email verified successfully! You can now log in.' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 export const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -34,6 +115,10 @@ export const loginUser = async (req, res) => {
 
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    if (!user.isEmailVerified) {
+      return res.status(403).json({ message: 'Please verify your email before logging in.' });
     }
 
     if (user.status === 'blocked') {
@@ -68,54 +153,82 @@ export const loginUser = async (req, res) => {
   }
 };
 
-// 3. Become Creator (Request)
 export const becomeCreator = async (req, res) => {
   try {
-    const { displayName, bio, country, city, language, websiteLink, socialLink } = req.body;
+    const {
+      displayName,
+      businessName,
+      category,
+      bio,
+      country,
+      countryCode, // ISO কোড (FR, DE, etc.) - VAT এর জন্য জরুরি
+      city,
+      customerType, // 'individual' or 'business'
+      vatNumber, // Optional
+      language,
+      websiteLink,
+      socialLink,
+    } = req.body;
 
-    // ✅ ১. ডাটাবেজ থেকে বর্তমান ইউজারকে খুঁজে বের করুন (req.user এর ওপর নির্ভর করবেন না)
     const currentUser = await User.findById(req.user._id);
+    if (!currentUser) return res.status(404).json({ message: 'User not found' });
 
-    // বর্তমান ইমেজগুলো ব্যাকআপ হিসেবে রাখা হচ্ছে
+    // ১. ইমেজ হ্যান্ডলিং
     let profilePath = currentUser.profile?.profileImage || '';
     let coverPath = currentUser.profile?.coverImage || '';
 
-    // ✅ ২. নতুন ফাইল আপলোড হলে তবেই পাথ আপডেট হবে
     if (req.files) {
-      if (req.files.profileImage?.[0]) {
-        profilePath = req.files.profileImage[0].path; // Cloudinary URL
-      }
-      if (req.files.coverImage?.[0]) {
-        coverPath = req.files.coverImage[0].path; // Cloudinary URL
-      }
+      if (req.files.profileImage?.[0]) profilePath = req.files.profileImage[0].path;
+      if (req.files.coverImage?.[0]) coverPath = req.files.coverImage[0].path;
     }
 
-    // ৩. ডাটাবেজ আপডেট
+    // ২. VAT Validation Logic (যদি বিজনেস হয় এবং ভ্যাট নাম্বার থাকে)
+    let isVatValid = false;
+    if (customerType === 'business' && vatNumber) {
+      // VIES API বা অন্য কোনো ভ্যালিডেটর কল করুন
+      isVatValid = await validateVatWithVIES(vatNumber);
+    }
+
+    // ৩. ডাটাবেস আপডেট
     const updatedUser = await User.findByIdAndUpdate(
       req.user._id,
       {
         $set: {
           'profile.displayName': displayName,
+          'profile.businessName': businessName,
+          'profile.category': category,
           'profile.bio': bio,
           'profile.country': country,
+          'profile.countryCode': countryCode,
           'profile.city': city,
+          'profile.customerType': customerType || 'individual',
+          'profile.vatNumber': vatNumber || '',
+          'profile.isVatValid': isVatValid,
+          'profile.vatLastChecked': isVatValid ? new Date() : null,
           'profile.language': language,
           'profile.websiteLink': websiteLink,
           'profile.socialLink': socialLink,
-          'profile.profileImage': profilePath, // আপডেট হওয়া পাথ
-          'profile.coverImage': coverPath, // আপডেট হওয়া পাথ
+          'profile.profileImage': profilePath,
+          'profile.coverImage': coverPath,
 
+          // রিকোয়েস্ট স্ট্যাটাস
           'creatorRequest.isApplied': true,
           'creatorRequest.appliedAt': new Date(),
           'creatorRequest.status': 'pending',
           'creatorRequest.rejectionReason': '',
         },
       },
-      { new: true, runValidators: true } // new: true নিশ্চিত করে যে আপডেট হওয়া ডাটা রিটার্ন করবে
+      { new: true, runValidators: true }
     ).select('-password');
 
+    await invalidateUserProfileCaches({
+      id: updatedUser._id,
+      username: updatedUser.username,
+      slug: updatedUser.slug,
+    });
+
     res.status(200).json({
-      message: 'Creator request submitted successfully',
+      message: 'Creator application submitted successfully for review.',
       user: updatedUser,
     });
   } catch (error) {
@@ -124,7 +237,6 @@ export const becomeCreator = async (req, res) => {
   }
 };
 
-// ৪. Profile View
 export const getMyProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('-password');
@@ -134,7 +246,6 @@ export const getMyProfile = async (req, res) => {
   }
 };
 
-// ৫. Logout
 export const logoutUser = (req, res) => {
   res.clearCookie('token', {
     httpOnly: true,
@@ -145,7 +256,6 @@ export const logoutUser = (req, res) => {
   res.status(200).json({ message: 'Logged out successfully' });
 };
 
-// ৬. (user update)
 export const updateUserProfile = async (req, res) => {
   try {
     const {
@@ -194,6 +304,12 @@ export const updateUserProfile = async (req, res) => {
       { returnDocument: 'after' }
     ).select('-password');
 
+    await invalidateUserProfileCaches({
+      id: updatedUser._id,
+      username: updatedUser.username,
+      slug: updatedUser.slug,
+    });
+
     res.status(200).json({ message: 'Profile updated successfully', user: updatedUser });
   } catch (error) {
     console.error('Profile Update Error:', error);
@@ -201,7 +317,6 @@ export const updateUserProfile = async (req, res) => {
   }
 };
 
-// ৭. (creator update)
 export const updateCreatorProfile = async (req, res) => {
   try {
     if (req.user.role !== 'creator') {
@@ -237,24 +352,45 @@ export const updateCreatorProfile = async (req, res) => {
       { new: true }
     ).select('-password');
 
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
+
     res.status(200).json({ message: 'Creator profile updated', user });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// ৮. Delete Account
 export const deleteUserAccount = async (req, res) => {
   try {
     const userId = req.user._id;
-
-    await Listing.deleteMany({ creatorId: userId });
 
     const user = await User.findByIdAndDelete(userId);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const deletedListings = await Listing.find({ creatorId: userId }).select('_id slug').lean();
+    await Listing.deleteMany({ creatorId: userId });
+
+    await Promise.all([
+      invalidateUserProfileCaches({
+        id: user._id,
+        username: user.username,
+        slug: user.slug,
+      }),
+      ...deletedListings.map((listing) =>
+        invalidateListingCaches({
+          id: listing._id,
+          slug: listing.slug,
+          creatorId: userId,
+        })
+      ),
+    ]);
 
     res.clearCookie('token', {
       httpOnly: true,
@@ -272,10 +408,27 @@ export const deleteUserAccount = async (req, res) => {
   }
 };
 
-// ৯. Public Profile View
 export const getPublicProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id)
+    const { id } = req.params;
+    const normalizedId = id.toLowerCase();
+    const cacheKey = `user:profile:${normalizedId}`;
+    const cachedProfile = parseCachedJson(await getCache(cacheKey));
+
+    if (cachedProfile) {
+      return res.status(200).json(cachedProfile);
+    }
+
+    let query;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query = { _id: id };
+    } else {
+      query = {
+        $or: [{ username: id.toLowerCase() }, { slug: id }],
+      };
+    }
+
+    const user = await User.findOne(query)
       .select('-password -email -isAdmin -creatorRequest.rejectionReason')
       .lean();
 
@@ -284,14 +437,23 @@ export const getPublicProfile = async (req, res) => {
     }
 
     const listingsCount = await Listing.countDocuments({
-      creatorId: req.params.id,
+      creatorId: user._id,
       status: 'approved',
     });
 
-    res.status(200).json({
+    const responseData = {
       user,
       listingsCount,
-    });
+    };
+
+    await Promise.all([
+      setCache(cacheKey, responseData, 3600),
+      setCache(`user:profile:${user._id.toString().toLowerCase()}`, responseData, 3600),
+      setCache(`user:profile:${user.username.toLowerCase()}`, responseData, 3600),
+      user.slug ? setCache(`user:profile:${user.slug.toLowerCase()}`, responseData, 3600) : null,
+    ]);
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Public Profile Error:', error);
     res.status(500).json({ message: 'Internal Server Error' });
@@ -302,13 +464,22 @@ export const getPublicProfile = async (req, res) => {
 export const getFamousCreators = async (req, res) => {
   try {
     const { limit = 10, offset = 0, sortBy = 'listings', search = '', country = '' } = req.query;
+    const cacheKey = await buildVersionedCacheKey(
+      'creators:famous',
+      JSON.stringify({ limit, offset, sortBy, search, country })
+    );
+    const cachedData = parseCachedJson(await getCache(cacheKey));
+
+    if (cachedData) {
+      return res.status(200).json(cachedData);
+    }
 
     const parsedLimit = parseInt(limit);
     const parsedOffset = parseInt(offset);
 
-    let userQuery = {
-      role: 'creator',
-      status: 'active',
+    let userQuery = { 
+      role: 'creator', 
+      status: 'active' 
     };
 
     // 🔎 Search filter
@@ -360,19 +531,25 @@ export const getFamousCreators = async (req, res) => {
                 input: '$allListings',
                 as: 'l',
                 in: {
-                  $cond: [{ $eq: ['$$l.status', 'approved'] }, '$$l.views', 0],
-                },
-              },
-            },
-          },
-        },
+                  $cond: [
+                    { $eq: ['$$l.status', 'approved'] },
+                    '$$l.views',
+                    0
+                  ]
+                }
+              }
+            }
+          }
+        }
       },
 
-      { $match: { totalListings: { $gt: 0 } } },
+      { $match: { totalListings: { $gt: 0 } } }
     ];
 
     // 🔥 Sorting
-    const sortField = sortBy === 'views' ? { totalViews: -1 } : { totalListings: -1 };
+    const sortField = sortBy === 'views'
+      ? { totalViews: -1 }
+      : { totalListings: -1 };
 
     aggregatePipeline.push({ $sort: sortField });
 
@@ -380,7 +557,10 @@ export const getFamousCreators = async (req, res) => {
     const countPipeline = [...aggregatePipeline];
 
     // ✅ OFFSET-BASED PAGINATION
-    aggregatePipeline.push({ $skip: parsedOffset }, { $limit: parsedLimit });
+    aggregatePipeline.push(
+      { $skip: parsedOffset },
+      { $limit: parsedLimit }
+    );
 
     const [creators, totalCountData] = await Promise.all([
       User.aggregate(aggregatePipeline),
@@ -389,7 +569,7 @@ export const getFamousCreators = async (req, res) => {
 
     const totalCreators = totalCountData[0]?.total || 0;
 
-    res.status(200).json({
+    const responseData = {
       success: true,
       data: creators,
       pagination: {
@@ -398,9 +578,210 @@ export const getFamousCreators = async (req, res) => {
         offset: parsedOffset,
         hasMore: parsedOffset + parsedLimit < totalCreators,
       },
-    });
+    };
+
+    await setCache(cacheKey, responseData, 600);
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Famous Creators Tactical Error:', error);
     res.status(500).json({ message: 'Internal Server Error' });
+  }
+};
+
+export const getTopCreatorsWithDropdown = async (req, res) => {
+  try {
+    const { search = '', country = '' } = req.query;
+    const cacheKey = await buildVersionedCacheKey(
+      'creators:top30',
+      JSON.stringify({ search, country })
+    );
+    const cachedData = parseCachedJson(await getCache(cacheKey));
+
+    if (cachedData) {
+      return res.status(200).json(cachedData);
+    }
+
+    let userQuery = {
+      role: 'creator',
+      status: 'active',
+    };
+
+    // 🔎 Search & Country filters
+    if (search) {
+      userQuery.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+      ];
+    }
+    if (country) {
+      userQuery['profile.country'] = { $regex: country, $options: 'i' };
+    }
+
+    const aggregatePipeline = [
+      { $match: userQuery },
+      {
+        $lookup: {
+          from: 'listings',
+          localField: '_id',
+          foreignField: 'creatorId',
+          as: 'allListings',
+        },
+      },
+      {
+        $project: {
+          firstName: 1,
+          lastName: 1,
+          username: 1,
+          profile: 1,
+          // ১. টপ ৩০ নির্ধারণের জন্য spending power ক্যালকুলেশন (Boost + PPC)
+          spendingPower: {
+            $sum: [
+              { $sum: '$allListings.promotion.boost.amountPaid' },
+              { $sum: '$allListings.promotion.ppc.amountPaid' },
+            ],
+          },
+          // ২. শুধুমাত্র এপ্রুভড লিস্টিং এর সংখ্যা
+          approvedListingsCount: {
+            $size: {
+              $filter: {
+                input: '$allListings',
+                as: 'l',
+                cond: { $eq: ['$$l.status', 'approved'] },
+              },
+            },
+          },
+        },
+      },
+      // যাদের অন্তত ১টি এপ্রুভড লিস্টিং আছে
+      { $match: { approvedListingsCount: { $gt: 0 } } },
+      // ৩. Spending Power অনুযায়ী সর্টিং (বেশি টাকা খরচ করা ক্রিয়েটররা উপরে থাকবে)
+      { $sort: { spendingPower: -1, approvedListingsCount: -1 } },
+    ];
+
+    const allCreators = await User.aggregate(aggregatePipeline);
+
+    // ৪. লজিক: প্রথম ৩০ জন "Top 30", বাকিরা "Dropdown List"
+    const top30Creators = allCreators.slice(0, 30);
+    const restCreators = allCreators.slice(30).map((c) => ({
+      _id: c._id,
+      fullName: `${c.firstName} ${c.lastName}`,
+      username: c.username,
+    }));
+
+    const responseData = {
+      success: true,
+      message: 'Our Top 30 Creators',
+      data: {
+        top30: top30Creators,
+        dropdownList: restCreators, // বাকিরা ড্রপডাউনের জন্য
+        totalCount: allCreators.length,
+      },
+    };
+
+    await setCache(cacheKey, responseData, 600);
+
+    res.status(200).json(responseData);
+  } catch (error) {
+    console.error('Top Creators Error:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+};
+
+export const getModerationReasons = async (req, res) => {
+  try {
+    const reasonCodes = User.schema.path('creatorRequest.rejectionReason').enumValues;
+
+    // empty string ফিল্টার করে ফ্রন্টএন্ডে ক্লিন ডাটা পাঠানো
+    const filteredReasons = reasonCodes.filter((r) => r !== '');
+
+    res.status(200).json({
+      success: true,
+      reasons: filteredReasons,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const forgotPassword = async (req, res) => {
+  try {
+    const user = await User.findOne({ email: req.body.email });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found with this email' });
+    }
+
+    const resetToken = crypto.randomBytes(20).toString('hex');
+
+    user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+    user.resetPasswordExpire = Date.now() + 30 * 60 * 1000;
+
+    await user.save();
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
+
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    const mailOptions = {
+      from: `"WCM Support" <${process.env.EMAIL_USER}>`,
+      to: user.email,
+      subject: 'Password Reset Request',
+      html: `
+        <h3>Password Reset Request</h3>
+        <p>You requested a password reset. Please click the link below to reset your password:</p>
+        <a href="${resetUrl}" clicktracking=off>${resetUrl}</a>
+        <p>This link will expire in 30 minutes.</p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.status(200).json({ success: true, message: 'Email sent successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const resetPasswordToken = crypto.createHash('sha256').update(req.params.token).digest('hex');
+
+    const user = await User.findOne({
+      resetPasswordToken,
+      resetPasswordExpire: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired token' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(req.body.password, salt);
+
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+
+    await user.save();
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
+
+    res.status(200).json({ success: true, message: 'Password reset successful' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };

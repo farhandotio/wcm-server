@@ -1,9 +1,11 @@
 import express from 'express';
 import {
+  cancelPromotion,
   createCheckoutSession,
   generateInvoice,
   handleStripeWebhook,
-  payWithWallet,
+  purchasePromotion,
+  togglePausePromotion,
 } from '../controllers/PaymentController.js';
 import { authMiddleware } from '../middlewares/auth.js';
 
@@ -13,8 +15,11 @@ router.post('/webhook', express.raw({ type: 'application/json' }), handleStripeW
 
 router.post('/create-checkout-session', express.json(), authMiddleware, createCheckoutSession);
 
-router.get('/creator/invoice/:id', authMiddleware, generateInvoice);
+router.post('/purchase-promotion', express.json(), authMiddleware, purchasePromotion);
 
-router.post('/pay-with-wallet', authMiddleware, payWithWallet);
+router.post('/cancel-promotion', express.json(), authMiddleware, cancelPromotion);
+
+router.get('/creator/invoice/:id', express.json(), authMiddleware, generateInvoice);
+router.post('/toggle-pause-promotion', express.json(), authMiddleware, togglePausePromotion);
 
 export default router;

@@ -11,22 +11,31 @@ import {
   deleteUserAccount,
   getPublicProfile,
   getFamousCreators,
+  getTopCreatorsWithDropdown,
+  getModerationReasons,
+  resetPassword,
+  forgotPassword,
+  verifyEmail,
 } from '../controllers/userController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
 const router = express.Router();
 
+router.get('/verify-email', verifyEmail);
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.post('/logout', logoutUser);
 router.delete('/delete-account', authMiddleware, deleteUserAccount);
 
+router.get('/moderation-reasons', getModerationReasons);
 router.get('/famous-creators', getFamousCreators);
+router.get('/top-creators-dropdown', getTopCreatorsWithDropdown);
 router.get('/me', authMiddleware, getMyProfile);
 router.get('/profile/:id', getPublicProfile);
 
 router.put(
   '/update-profile',
+
   authMiddleware,
   upload.fields([
     { name: 'profileImage', maxCount: 1 },
@@ -56,5 +65,8 @@ router.post(
   ]),
   becomeCreator
 );
+
+router.post('/forgot-password', forgotPassword);
+router.put('/reset-password/:token', resetPassword);
 
 export default router;

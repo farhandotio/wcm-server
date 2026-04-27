@@ -12,19 +12,25 @@ import {
   getCreatorListingCount,
   handlePpcClick,
   cancelPromotion,
+  getMyFavorites,
+  getModerationReasons,
 } from '../controllers/listingController.js';
+import { getTagsByCategory } from '../controllers/adminController.js';
 import { authMiddleware, authorizeRoles, optionalAuth } from '../middlewares/auth.js';
 
 const router = express.Router();
 
+router.get('/moderation-reasons', getModerationReasons);
 router.get('/public', optionalAuth, getPublicListings);
+router.get('/tags/by-category/:categoryId', getTagsByCategory);
 router.get('/meta-data', getCategoriesAndTags);
 
 router.get('/count/:creatorId', getCreatorListingCount);
 
+router.get('/favorites', authMiddleware, getMyFavorites);
 router.post('/favorite/:id', authMiddleware, toggleFavorite);
 
-router.post('/:id/click', handlePpcClick);
+router.post('/:id/click', optionalAuth, handlePpcClick);
 
 router.get('/my-listings', authMiddleware, authorizeRoles('creator'), getMyListings);
 router.post(

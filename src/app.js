@@ -2,14 +2,24 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import cors from 'cors';
+import { globalLimiter } from './utils/rateLimiter.js';
 
 import userRoutes from './routes/userRoutes.js';
 import listingRoutes from './routes/listingRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import creatorRoutes from './routes/creatorRoutes.js';
+import auditRoutes from './routes/auditRoutes.js';
+import sliderRoutes from './routes/sliderRoutes.js';
+import blogRoutes from './routes/blogRoutes.js';
+import viewsRoutes from './routes/viewsRoutes.js';
+import faqRoutes from './routes/faqRoutes.js';
+import seoRoutes from './routes/seoRoutes.js';
+import footerRoutes from './routes/footerRoutes.js';
 
 const app = express();
+app.set('trust proxy', 1);
+
 const __dirname = path.resolve();
 
 app.use(
@@ -22,13 +32,26 @@ app.use(
 );
 
 app.use(cookieParser());
+
+app.use(globalLimiter);
+
+// Stripe Webhook এর জন্য এটি json() এর উপরে থাকা ভালো
 app.use('/api/payments', paymentRoutes);
+
 app.use(express.json());
 
+// Routes
 app.use('/api/users', userRoutes);
-app.use('/api/listings', listingRoutes);
 app.use('/api/creator', creatorRoutes);
+app.use('/api/listings', listingRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/audit', auditRoutes);
+app.use('/api/sliders', sliderRoutes);
+app.use('/api/blogs', blogRoutes);
+app.use('/api/views', viewsRoutes);
+app.use('/api/faqs', faqRoutes);
+app.use('/api/seo', seoRoutes);
+app.use('/api/footer', footerRoutes);
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
