@@ -7,9 +7,144 @@ import fs from 'fs';
 import ExcelJS from 'exceljs';
 import Transaction from '../models/Transaction.js';
 import Analytics from '../models/Analytics.js';
-import { SystemSettings } from '../models/SystemSettings.js';
 import AuditLog from '../models/AuditLog.js';
 import mongoose from 'mongoose';
+import Visitor from '../models/Visitor.js';
+import Region from '../models/Region.js';
+import Tradition from '../models/Tradition.js';
+
+// Get Regions by Category
+export const getRegionsByCategory = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const regions = await Region.find({ category: categoryId });
+    res.status(200).json(regions);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+// REGION CONTROLLERS
+export const createRegion = async (req, res) => {
+  try {
+    const { title, categoryId } = req.body;
+    if (!categoryId) return res.status(400).json({ message: 'Category ID is required' });
+
+    const newRegion = await Region.create({ title, category: categoryId });
+    res.status(201).json(newRegion);
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ message: 'Region already exists' });
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getAllRegions = async (req, res) => {
+  try {
+    const regions = await Region.find().populate('category', 'title');
+    res.status(200).json(regions);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateRegion = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updatedRegion = await Region.findByIdAndUpdate(id, req.body, { new: true });
+    res.status(200).json(updatedRegion);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const deleteRegion = async (req, res) => {
+  try {
+    await Region.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: 'Region deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getTraditionsByCategory = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+
+    // ১. চেক করুন Tradition মডেলটি ইমপোর্ট করা আছে কি না
+    // ২. ফিল্টার করার লজিক ঠিক আছে কি না
+    const traditions = await Tradition.find({ category: categoryId });
+
+    res.status(200).json(traditions);
+  } catch (error) {
+    // এখানে সার্ভার কনসোলে এরর প্রিন্ট হবে, ওটা চেক করুন
+    console.error("Error in getTraditionsByCategory:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// TRADITION CONTROLLERS
+export const createTradition = async (req, res) => {
+  try {
+    const { title, categoryId } = req.body;
+    const newTradition = await Tradition.create({ title, category: categoryId });
+    res.status(201).json(newTradition);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getAllTraditions = async (req, res) => {
+  try {
+    const traditions = await Tradition.find().populate('category', 'title');
+    res.status(200).json(traditions);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateTradition = async (req, res) => {
+  try {
+    const updated = await Tradition.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.status(200).json(updated);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const deleteTradition = async (req, res) => {
+  try {
+    await Tradition.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: 'Tradition deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// CREATOR SPECIAL: GET EVERYTHING BY CATEGORY
+export const getCategoryAssets = async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+
+    const [tags, regions, traditions] = await Promise.all([
+      Tag.find({ category: categoryId }),
+      Region.find({ category: categoryId }),
+      Tradition.find({ category: categoryId })
+    ]);
+
+    res.status(200).json({
+      success: true,
+      tags,
+      regions,
+      traditions
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+import {
+  invalidateListingCaches,
+  invalidateMetaCaches,
+  invalidateUserProfileCaches,
+} from '../utils/cache.js';
 
 export const createTag = async (req, res) => {
   try {
@@ -24,6 +159,8 @@ export const createTag = async (req, res) => {
       category: categoryId,
     });
 
+    await invalidateMetaCaches();
+
     res.status(201).json(newTag);
   } catch (error) {
     if (error.code === 11000) {
@@ -33,7 +170,6 @@ export const createTag = async (req, res) => {
   }
 };
 
-// new
 export const getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find().sort({ order: 1 });
@@ -43,7 +179,6 @@ export const getAllCategories = async (req, res) => {
   }
 };
 
-// new
 export const getTagsByCategory = async (req, res) => {
   try {
     const { categoryId } = req.params;
@@ -61,6 +196,7 @@ export const createCategory = async (req, res) => {
       title: req.body.title,
       order: count,
     });
+    await invalidateMetaCaches();
     res.status(201).json(category);
   } catch (error) {
     if (error.code === 11000) {
@@ -80,6 +216,7 @@ export const updateCategory = async (req, res) => {
       { new: true, runValidators: true }
     );
     if (!updatedCategory) return res.status(404).json({ message: 'Category not found' });
+    await invalidateMetaCaches();
     res.status(200).json(updatedCategory);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -91,6 +228,7 @@ export const deleteCategory = async (req, res) => {
     const { id } = req.params;
     const category = await Category.findByIdAndDelete(id);
     if (!category) return res.status(404).json({ message: 'Category not found' });
+    await invalidateMetaCaches();
     res.status(200).json({ message: 'Category deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -112,6 +250,7 @@ export const updateTag = async (req, res) => {
       { new: true, runValidators: true }
     );
 
+    await invalidateMetaCaches();
     res.status(200).json(updatedTag);
   } catch (error) {
     console.error('Update Tag Error:', error);
@@ -140,6 +279,7 @@ export const deleteTag = async (req, res) => {
     }
 
     await Tag.findByIdAndDelete(id);
+    await invalidateMetaCaches();
     res.status(200).json({ message: 'Tag and image deleted successfully' });
   } catch (error) {
     console.error('Delete operation failed:', error);
@@ -301,46 +441,16 @@ export const approveCreator = async (req, res) => {
     ).select('-password');
 
     if (!user) return res.status(404).json({ message: 'User not found' });
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
     res.status(200).json({ message: 'User is now a Creator', user });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
-
-// export const rejectCreator = async (req, res) => {
-//   try {
-//     const { userId } = req.params;
-//     const { reason, statusType } = req.body;
-
-//     const user = await User.findByIdAndUpdate(
-//       userId,
-//       {
-//         $set: {
-//           'creatorRequest.isApplied': false,
-
-//           'creatorRequest.status': statusType || 'rejected',
-
-//           'creatorRequest.rejectionReason': reason || 'No specific reason provided.',
-
-//           'creatorRequest.adminComment':
-//             statusType === 'needs_review'
-//               ? 'Action required: Please update your profile as requested.'
-//               : 'Final Decision: Application Rejected.',
-//         },
-//       },
-//       { new: true }
-//     ).select('-password');
-
-//     if (!user) return res.status(404).json({ message: 'User not found' });
-
-//     res.status(200).json({
-//       message: `Creator request processed as ${statusType}`,
-//       user,
-//     });
-//   } catch (error) {
-//     res.status(500).json({ message: error.message });
-//   }
-// };
 
 export const rejectCreator = async (req, res) => {
   try {
@@ -375,6 +485,11 @@ export const rejectCreator = async (req, res) => {
     ).select('-password');
 
     if (!user) return res.status(404).json({ success: false, message: 'Node not found.' });
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
 
     res.status(200).json({
       success: true,
@@ -404,6 +519,11 @@ export const toggleUserStatus = async (req, res) => {
 
     user.status = newStatus;
     await user.save();
+    await invalidateUserProfileCaches({
+      id: user._id,
+      username: user.username,
+      slug: user.slug,
+    });
 
     res.status(200).json({
       success: true,
@@ -446,7 +566,7 @@ export const manageListings = async (req, res) => {
         ...item,
         creatorName: item.creatorId
           ? `${item.creatorId.firstName || ''} ${item.creatorId.lastName || ''}`.trim() ||
-            item.creatorId.username
+          item.creatorId.username
           : 'Unknown Creator',
         categoryName: item.category?.title || 'Uncategorized',
         ppcStatus: ppcBalance.toFixed(2),
@@ -464,7 +584,14 @@ export const manageListings = async (req, res) => {
 export const deleteListingByAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    await Listing.findByIdAndDelete(id);
+    const listing = await Listing.findByIdAndDelete(id).select('_id slug creatorId');
+    if (listing) {
+      await invalidateListingCaches({
+        id: listing._id,
+        slug: listing.slug,
+        creatorId: listing.creatorId,
+      });
+    }
     res.status(200).json({ message: 'Listing removed by admin' });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -513,6 +640,11 @@ export const updateListingStatus = async (req, res) => {
     }
 
     await listing.save();
+    await invalidateListingCaches({
+      id: listing._id,
+      slug: listing.slug,
+      creatorId: listing.creatorId,
+    });
 
     res.status(200).json({
       success: true,
@@ -533,6 +665,7 @@ export const updateCategoryOrder = async (req, res) => {
     });
 
     await Promise.all(updatePromises);
+    await invalidateMetaCaches();
 
     res.status(200).json({ message: 'Order updated successfully' });
   } catch (error) {
@@ -684,110 +817,6 @@ export const exportTransactionsExcel = async (req, res) => {
   }
 };
 
-// export const getAllTransactions = async (req, res) => {
-//   try {
-//     const {
-//       page = 1,
-//       limit = 10,
-//       search = '',
-//       filter = 'all', // all, today, month, year
-//     } = req.query;
-
-//     let query = { status: 'completed' };
-
-//     // --- ১. ডেট ফিল্টারিং লজিক ---
-//     const now = new Date();
-//     if (filter === 'today') {
-//       const startOfToday = new Date(now.setHours(0, 0, 0, 0));
-//       query.createdAt = { $gte: startOfToday };
-//     } else if (filter === 'month') {
-//       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-//       query.createdAt = { $gte: startOfMonth };
-//     } else if (filter === 'year') {
-//       const startOfYear = new Date(now.getFullYear(), 0, 1);
-//       query.createdAt = { $gte: startOfYear };
-//     }
-
-//     // --- ২. গ্লোবাল সার্চ লজিক ---
-//     if (search) {
-//       // ইউজারের নাম বা ইমেইল দিয়ে সার্চ করার জন্য প্রথমে ইউজারদের খুঁজে বের করা
-//       const users = await User.find({
-//         $or: [
-//           { firstName: { $regex: search, $options: 'i' } },
-//           { lastName: { $regex: search, $options: 'i' } },
-//           { email: { $regex: search, $options: 'i' } },
-//           { username: { $regex: search, $options: 'i' } },
-//         ],
-//       }).select('_id');
-
-//       const userIds = users.map((u) => u._id);
-
-//       // ট্রানজেকশন টেবিলে সার্চ (Invoice, Package Type বা User ID দিয়ে)
-//       query.$or = [
-//         { invoiceNumber: { $regex: search, $options: 'i' } },
-//         { packageType: { $regex: search, $options: 'i' } },
-//         { stripeSessionId: { $regex: search, $options: 'i' } },
-//         { creator: { $in: userIds } },
-//       ];
-//     }
-
-//     const transactions = await Transaction.find(query)
-//       .populate('creator', 'firstName lastName email username')
-//       .populate('listing', 'title')
-//       .sort({ createdAt: -1 })
-//       .limit(limit * 1)
-//       .skip((page - 1) * limit)
-//       .lean();
-
-//     const count = await Transaction.countDocuments(query);
-
-//     // --- ৩. ডাটা ফরম্যাটিং ---
-//     const formattedTransactions = transactions.map((tx) => {
-//       const netAmount = (tx.amountPaid || 0) - (tx.vatAmount || 0);
-
-//       return {
-//         _id: tx._id,
-//         userId: tx.creator?._id || 'N/A',
-//         creatorName: tx.creator ? `${tx.creator.firstName} ${tx.creator.lastName}` : 'Unknown',
-//         creatorEmail: tx.creator?.email,
-//         listingId: tx.listing?._id || 'N/A',
-//         listingTitle: tx.listing?.title || 'Deleted Listing',
-//         type: tx.packageType,
-//         amount: tx.amountPaid,
-//         currency: (tx.currency || 'EUR').toUpperCase(),
-//         netAmount: Number(netAmount.toFixed(2)),
-//         vatAmount: tx.vatAmount || 0,
-//         fxRate: tx.fxRate || 1,
-//         amountInEUR: tx.amountInEUR || 0,
-//         invoiceNumber: tx.invoiceNumber || 'N/A',
-//         stripeId: tx.stripeSessionId,
-//         createdAt: tx.createdAt,
-//       };
-//     });
-
-//     // সামারি স্ট্যাট (ঐচ্ছিক কিন্তু অ্যাডমিনের জন্য দরকারি)
-//     const totalRevenue = formattedTransactions.reduce((acc, curr) => acc + curr.amountInEUR, 0);
-
-//     res.status(200).json({
-//       success: true,
-//       transactions: formattedTransactions,
-//       pagination: {
-//         totalCount: count,
-//         totalPages: Math.ceil(count / limit),
-//         currentPage: Number(page),
-//       },
-//       stats: {
-//         totalEURInPage: Number(totalRevenue.toFixed(2)),
-//       },
-//     });
-//   } catch (error) {
-//     console.error('GetAllTransactions Error:', error);
-//     res.status(500).json({ success: false, message: error.message });
-//   }
-// };
-
-// --- ১. নির্দিষ্ট ইউজার ফিল্টারসহ সব ট্রানজ্যাকশন দেখা ---
-
 export const getAllTransactions = async (req, res) => {
   try {
     const { page = 1, limit = 10, search = '', filter = 'all', userId } = req.query;
@@ -889,7 +918,7 @@ export const exportTransactionsByRange = async (req, res) => {
 
     worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEA580C' } };
 
-    transactions.forEach(tx => {
+    transactions.forEach((tx) => {
       worksheet.addRow({
         date: tx.createdAt.toISOString().split('T')[0],
         invoice: tx.invoiceNumber,
@@ -900,8 +929,14 @@ export const exportTransactionsByRange = async (req, res) => {
       });
     });
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=Transactions_${startDate}_to_${endDate}.xlsx`);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=Transactions_${startDate}_to_${endDate}.xlsx`
+    );
 
     await workbook.xlsx.write(res);
     res.end();
@@ -926,6 +961,11 @@ export const updatePpcBalanceManual = async (req, res) => {
     listing.isPromoted = true;
 
     await listing.save();
+    await invalidateListingCaches({
+      id: listing._id,
+      slug: listing.slug,
+      creatorId: listing.creatorId,
+    });
 
     res.status(200).json({
       success: true,
@@ -1076,6 +1116,7 @@ export const getAdminStats = async (req, res) => {
       recentPaymentsCount,
       allSuccessfulTopups,
       globalAnalytics,
+      siteTraffic,
       auditTotals,
     ] = await Promise.all([
       User.countDocuments({ role: 'creator' }),
@@ -1090,7 +1131,15 @@ export const getAdminStats = async (req, res) => {
       Analytics.aggregate([
         { $group: { _id: null, totalViews: { $sum: '$views' }, totalClicks: { $sum: '$clicks' } } },
       ]),
-      // AuditLog থেকে PPC এবং Boost এর আয় বের করা
+      Visitor.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalSiteViews: { $sum: '$visitCount' },
+            uniqueVisitors: { $count: {} },
+          },
+        },
+      ]),
       AuditLog.aggregate([
         {
           $match: {
@@ -1188,6 +1237,8 @@ export const getAdminStats = async (req, res) => {
         totalVat: totalVat.toFixed(2),
         activePromotions: activePromotionsCount,
         recentPayments: recentPaymentsCount,
+        totalSiteViews: siteTraffic[0]?.totalSiteViews || 0,
+        uniqueVisitors: siteTraffic[0]?.uniqueVisitors || 0,
         totalViews: globalAnalytics[0]?.totalViews || 0,
         totalClicks: globalAnalytics[0]?.totalClicks || 0,
         pendingListings,

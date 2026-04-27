@@ -13,11 +13,15 @@ import {
   getFamousCreators,
   getTopCreatorsWithDropdown,
   getModerationReasons,
+  resetPassword,
+  forgotPassword,
+  verifyEmail,
 } from '../controllers/userController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
 const router = express.Router();
 
+router.get('/verify-email', verifyEmail);
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.post('/logout', logoutUser);
@@ -61,5 +65,8 @@ router.post(
   ]),
   becomeCreator
 );
+
+router.post('/forgot-password', forgotPassword);
+router.put('/reset-password/:token', resetPassword);
 
 export default router;

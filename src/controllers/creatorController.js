@@ -95,16 +95,20 @@ export const getPromotionAnalytics = async (req, res) => {
       }
     }
 
+    const boostIsActive = !!(boost.isActive && hoursRemaining > 0);
+    const ppcIsActive = !!(ppc.isActive && ppc.ppcBalance > 0);
+
     res.status(200).json({
       success: true,
       data: {
         title: listing.title,
         image: listing.image,
-        isPromoted: !!listing.isPromoted,
+        isPromoted: boostIsActive || ppcIsActive,
         level: listing.promotion?.level || 0,
         views: listing.views || 0,
         ppc: {
-          isActive: !!(ppc.isActive && ppc.ppcBalance > 0),
+          isActive: ppcIsActive,
+          isPaused: !!ppc.isPaused,
           balance: Number(ppc.ppcBalance || 0).toFixed(2),
           costPerClick: Number(ppc.costPerClick || 0.1).toFixed(2),
           totalPurchased,
@@ -113,7 +117,8 @@ export const getPromotionAnalytics = async (req, res) => {
           consumptionRate: Math.min(100, consumptionRate),
         },
         boost: {
-          isActive: !!(boost.isActive && hoursRemaining > 0),
+          isActive: boostIsActive,
+          isPaused: !!boost.isPaused,
           expiresAt: boost.expiresAt,
           // --- এই দুটো ফিল্ড ফ্রন্টএন্ড রিফান্ডের জন্য মাস্ট ---
           amountPaid: Number(boost.amountPaid || 0),

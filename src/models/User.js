@@ -13,9 +13,9 @@ const REASON_CODES = [
   'NOT_RELEVANT_TO_OUR_BUSINESS_MODEL',
 ];
 
-
 const userSchema = new mongoose.Schema(
   {
+    slug: { type: String, required: true, unique: true, trim: true },
     firstName: { type: String, required: true, trim: true },
     lastName: { type: String, required: true, trim: true },
     username: { type: String, required: true, unique: true, lowercase: true },
@@ -97,6 +97,12 @@ const userSchema = new mongoose.Schema(
       data: { type: Object },
     },
     listingsCount: { type: Number, default: 0 },
+    resetPasswordToken: String,
+    resetPasswordExpire: Date,
+
+    emailVerificationToken: { type: String },
+    emailVerificationExpire: { type: Date },
+    isEmailVerified: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
