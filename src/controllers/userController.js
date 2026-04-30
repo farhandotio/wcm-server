@@ -16,11 +16,15 @@ import {
   setCache,
 } from '../utils/cache.js';
 import dns from 'dns/promises';
+import { Resend } from 'resend';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 export const registerUser = async (req, res) => {
   try {
     const { firstName, lastName, username, email, password } = req.body;
 
+    // ১. ডুপ্লিকেট ইউজার চেক
     let user = await User.findOne({ $or: [{ email }, { username }] });
 
     if (user && user.isEmailVerified) {
@@ -59,35 +63,26 @@ export const registerUser = async (req, res) => {
       });
     }
 
+    // ২. ভেরিফিকেশন ইউআরএল
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
 
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true, 
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-      // এই অংশটি ENETUNREACH এরর ফিক্স করবে
-      tls: {
-        rejectUnauthorized: false,
-      },
-      connectionTimeout: 10000,
-      family: 4, 
-    });
+    // ৩. Resend দিয়ে ইমেইল পাঠানো
+    // ENV চেক করা যাতে API Key মিসিং থাকলে সার্ভার ক্রাশ না করে
+    if (!process.env.RESEND_API_KEY) {
+      console.error('Missing RESEND_API_KEY in Environment Variables');
+      return res.status(500).json({ message: 'Email service configuration missing.' });
+    }
 
-    await transporter.sendMail({
-      from: `"World Culture Marketplace" <${process.env.EMAIL_USER}>`,
-      to: email,
+    const { data, error } = await resend.emails.send({
+      from: 'World Culture Marketplace <onboarding@resend.dev>', // ডোমেইন ভেরিফাই না করা পর্যন্ত এটিই থাকবে
+      to: [email],
       subject: 'Verify your email address',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto; border: 1px solid #eee; padding: 20px; border-radius: 15px;">
           <h2 style="color: #333;">Welcome, ${firstName}!</h2>
           <p>Please verify your email address by clicking the button below. This link expires in <strong>24 hours</strong>.</p>
           <div style="text-align: center; margin: 30px 0;">
-            <a href="${verifyUrl}" style="display:inline-block; padding:14px 30px; background:#F57C00; color:#fff; border-radius:10px; text-decoration:none; font-weight:bold;">
+            <a href="${verifyUrl}" style="padding:14px 30px; background:#F57C00; color:#fff; border-radius:10px; text-decoration:none; font-weight:bold; display:inline-block;">
               Verify Email
             </a>
           </div>
@@ -96,12 +91,17 @@ export const registerUser = async (req, res) => {
       `,
     });
 
+    if (error) {
+      console.error('Resend Error:', error);
+      return res.status(500).json({ message: 'Could not send verification email.' });
+    }
+
     res.status(201).json({
       message: 'Registration link sent! Please check your email to verify your account.',
     });
   } catch (error) {
-    console.error('Mail Error:', error);
-    res.status(500).json({ message: 'Network error while sending email. Please try again.' });
+    console.error('System Error:', error);
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -728,50 +728,68 @@ export const getModerationReasons = async (req, res) => {
 
 export const forgotPassword = async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.body.email });
+    const { email } = req.body;
+    const user = await User.findOne({ email });
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found with this email' });
     }
 
+    // ১. রিসেট টোকেন তৈরি
     const resetToken = crypto.randomBytes(20).toString('hex');
 
+    // ২. টোকেন হ্যাশ করে ডেটাবেজে সেভ করা
     user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-    user.resetPasswordExpire = Date.now() + 30 * 60 * 1000;
+    user.resetPasswordExpire = Date.now() + 30 * 60 * 1000; // ৩০ মিনিট মেয়াদ
 
     await user.save();
-    await invalidateUserProfileCaches({
-      id: user._id,
-      username: user.username,
-      slug: user.slug,
-    });
 
+    // ক্যাশ ইনভ্যালিডেশন (যদি আপনার সিস্টেমে থাকে)
+    if (typeof invalidateUserProfileCaches === 'function') {
+      await invalidateUserProfileCaches({
+        id: user._id,
+        username: user.username,
+        slug: user.slug,
+      });
+    }
+
+    // ৩. রিসেট ইউআরএল তৈরি
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+    // ৪. Resend দিয়ে ইমেইল পাঠানো
+    if (!process.env.RESEND_API_KEY) {
+      console.error('Missing RESEND_API_KEY in Environment Variables');
+      return res.status(500).json({ message: 'Email service not configured.' });
+    }
 
-    const mailOptions = {
-      from: `"WCM Support" <${process.env.EMAIL_USER}>`,
-      to: user.email,
+    const { data, error } = await resend.emails.send({
+      from: 'WCM Support <onboarding@resend.dev>', // ডোমেইন ভেরিফাই করলে support@yourdomain.com দিতে পারবেন
+      to: [user.email],
       subject: 'Password Reset Request',
       html: `
-        <h3>Password Reset Request</h3>
-        <p>You requested a password reset. Please click the link below to reset your password:</p>
-        <a href="${resetUrl}" clicktracking=off>${resetUrl}</a>
-        <p>This link will expire in 30 minutes.</p>
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: auto; border: 1px solid #eee; padding: 25px; border-radius: 15px;">
+          <h2 style="color: #333;">Password Reset Request</h2>
+          <p style="color: #555;">You requested a password reset for your World Culture Marketplace account. Please click the button below to set a new password:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetUrl}" style="background-color: #F57C00; color: white; padding: 12px 25px; text-decoration: none; font-weight: bold; border-radius: 8px; display: inline-block;">
+              Reset Password
+            </a>
+          </div>
+          <p style="color: #888; font-size: 14px;">This link will expire in <strong>30 minutes</strong>.</p>
+          <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="color: #999; font-size: 12px;">If you did not request this, please ignore this email or contact support if you have concerns.</p>
+        </div>
       `,
-    };
+    });
 
-    await transporter.sendMail(mailOptions);
+    if (error) {
+      console.error('Resend Error:', error);
+      return res.status(500).json({ success: false, message: 'Could not send reset email' });
+    }
 
-    res.status(200).json({ success: true, message: 'Email sent successfully' });
+    res.status(200).json({ success: true, message: 'Password reset email sent successfully' });
   } catch (error) {
+    console.error('Forgot Password Error:', error);
     res.status(500).json({ message: error.message });
   }
 };
