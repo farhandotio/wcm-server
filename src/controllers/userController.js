@@ -21,10 +21,8 @@ export const registerUser = async (req, res) => {
   try {
     const { firstName, lastName, username, email, password } = req.body;
 
-    // ১. চেক করা ইউজার আগে থেকেই আছে কি না
     let user = await User.findOne({ $or: [{ email }, { username }] });
 
-    // যদি ইউজার থাকে এবং সে অলরেডি ভেরিফাইড হয়
     if (user && user.isEmailVerified) {
       return res.status(400).json({ message: 'User already exists and is verified.' });
     }
@@ -61,15 +59,23 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    // ৪. ভেরিফিকেশন ইমেইল পাঠানো
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
 
     const transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true, 
       service: 'gmail',
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
       },
+      // এই অংশটি ENETUNREACH এরর ফিক্স করবে
+      tls: {
+        rejectUnauthorized: false,
+      },
+      connectionTimeout: 10000,
+      family: 4, 
     });
 
     await transporter.sendMail({
@@ -94,7 +100,8 @@ export const registerUser = async (req, res) => {
       message: 'Registration link sent! Please check your email to verify your account.',
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Mail Error:', error);
+    res.status(500).json({ message: 'Network error while sending email. Please try again.' });
   }
 };
 
