@@ -74,7 +74,7 @@ export const registerUser = async (req, res) => {
     }
 
     const { data, error } = await resend.emails.send({
-      from: 'World Culture Marketplace <onboarding@resend.dev>', // ডোমেইন ভেরিফাই না করা পর্যন্ত এটিই থাকবে
+      from: 'World Culture Marketplace <noreply@worldculturemarketplace.com>',
       to: [email],
       subject: 'Verify your email address',
       html: `
@@ -763,7 +763,7 @@ export const forgotPassword = async (req, res) => {
     }
 
     const { data, error } = await resend.emails.send({
-      from: 'WCM Support <onboarding@resend.dev>', // ডোমেইন ভেরিফাই করলে support@yourdomain.com দিতে পারবেন
+      from: 'WCM Support <support@worldculturemarketplace.com>', // ডোমেইন ভেরিফাই করলে support@yourdomain.com দিতে পারবেন
       to: [user.email],
       subject: 'Password Reset Request',
       html: `

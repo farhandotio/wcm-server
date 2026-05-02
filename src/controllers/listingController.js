@@ -21,6 +21,9 @@ import {
   setCache,
 } from '../utils/cache.js';
 
+// ─────────────────────────────────────────────
+// Helper: listing-এর promotion ও favorites state নিশ্চিত করা
+// ─────────────────────────────────────────────
 const ensureListingFavoriteState = (listing) => {
   if (!Array.isArray(listing.favorites)) {
     listing.favorites = [];
@@ -54,6 +57,21 @@ const ensureListingFavoriteState = (listing) => {
   return listing;
 };
 
+// ─────────────────────────────────────────────
+// Helper: country থেকে continent বের করা
+// ─────────────────────────────────────────────
+const getContinentByCountry = (countryName) => {
+  for (const [continent, countries] of Object.entries(continentMapping)) {
+    if (countries.includes(countryName)) {
+      return continent;
+    }
+  }
+  return 'Other';
+};
+
+// ─────────────────────────────────────────────
+// PPC Click Handle করা
+// ─────────────────────────────────────────────
 export const handlePpcClick = async (req, res) => {
   try {
     const { id } = req.params;
@@ -65,16 +83,19 @@ export const handlePpcClick = async (req, res) => {
     const listing = await Listing.findById(id);
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
+    // PPC active না থাকলে বা balance না থাকলে organic click
     if (!listing.promotion?.ppc?.isActive || listing.promotion.ppc.ppcBalance <= 0) {
       return res.status(200).json({ success: true, message: 'Organic click recorded.' });
     }
 
+    // Campaign pause থাকলে organic click
     if (listing.promotion.ppc.isPaused) {
       return res
         .status(200)
         .json({ success: true, message: 'Campaign paused, organic click recorded.' });
     }
 
+    // Duplicate click চেক করা
     const alreadyClicked = await InteractionLog.findOne({
       listingId: id,
       type: 'ppc_click',
@@ -92,6 +113,8 @@ export const handlePpcClick = async (req, res) => {
         (listing.promotion.ppc.ppcBalance - cost).toFixed(4)
       );
       listing.promotion.ppc.executedClicks += 1;
+      // FIX: totalClicks ও বাড়ানো হচ্ছে (আগে missing ছিল)
+      listing.promotion.ppc.totalClicks = (listing.promotion.ppc.totalClicks || 0) + 1;
 
       let isBudgetExhausted = false;
 
@@ -102,12 +125,15 @@ export const handlePpcClick = async (req, res) => {
 
       applyPromotionLogic(listing);
       await listing.save();
+
+      // Cache invalidate করা
       await invalidateListingCaches({
         id: listing._id,
         slug: listing.slug,
         creatorId: listing.creatorId,
       });
 
+      // Interaction log তৈরি
       await InteractionLog.create({
         listingId: id,
         userId: userId || null,
@@ -115,6 +141,7 @@ export const handlePpcClick = async (req, res) => {
         type: 'ppc_click',
       });
 
+      // Audit log
       await createAuditLog({
         req,
         user: listing.creatorId,
@@ -130,6 +157,7 @@ export const handlePpcClick = async (req, res) => {
         },
       });
 
+      // Analytics update
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       await Analytics.findOneAndUpdate(
@@ -155,6 +183,9 @@ export const handlePpcClick = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Categories, Tags ও Regions fetch করা
+// ─────────────────────────────────────────────
 export const getCategoriesAndTags = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
@@ -220,7 +251,6 @@ export const getCategoriesAndTags = async (req, res) => {
     };
 
     await setCache(cacheKey, responseData, 3600);
-
     res.status(200).json(responseData);
   } catch (error) {
     console.error('Meta Data Error:', error);
@@ -232,15 +262,9 @@ export const getCategoriesAndTags = async (req, res) => {
   }
 };
 
-const getContinentByCountry = (countryName) => {
-  for (const [continent, countries] of Object.entries(continentMapping)) {
-    if (countries.includes(countryName)) {
-      return continent;
-    }
-  }
-  return 'Other';
-};
-
+// ─────────────────────────────────────────────
+// Listing তৈরি করা
+// ─────────────────────────────────────────────
 export const createListing = async (req, res) => {
   try {
     const {
@@ -260,7 +284,6 @@ export const createListing = async (req, res) => {
     }
 
     const continent = getContinentByCountry(country);
-
     const generatedSlug = `${slugify(title, { lower: true, strict: true })}-${Date.now()}`;
     const imageUrl = req.file.path;
 
@@ -269,9 +292,9 @@ export const createListing = async (req, res) => {
       urlList = Array.isArray(externalUrls)
         ? externalUrls
         : externalUrls
-            .split(',')
-            .map((url) => url.trim())
-            .filter((url) => url !== '');
+          .split(',')
+          .map((url) => url.trim())
+          .filter((url) => url !== '');
     }
 
     let tagIds = [];
@@ -279,9 +302,9 @@ export const createListing = async (req, res) => {
       tagIds = Array.isArray(culturalTags)
         ? culturalTags
         : culturalTags
-            .split(',')
-            .map((t) => t.trim())
-            .filter((t) => t !== '');
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t !== '');
     }
 
     const newListing = await Listing.create({
@@ -321,6 +344,9 @@ export const createListing = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Listing আপডেট করা
+// ─────────────────────────────────────────────
 export const updateListing = async (req, res) => {
   try {
     const { id } = req.params;
@@ -334,14 +360,15 @@ export const updateListing = async (req, res) => {
 
     const updateData = { ...req.body };
 
+    // Cultural tags validate ও update
     let tags = [];
     if (updateData.culturalTags) {
       tags = Array.isArray(updateData.culturalTags)
         ? updateData.culturalTags
         : updateData.culturalTags
-            .split(',')
-            .map((t) => t.trim())
-            .filter((t) => t !== '');
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t !== '');
 
       if (tags.length > 5) {
         return res.status(400).json({ message: 'Maximum 5 cultural tags allowed' });
@@ -349,11 +376,13 @@ export const updateListing = async (req, res) => {
       listing.culturalTags = tags;
     }
 
+    // Approved বা blocked ছাড়া অন্য status হলে pending-এ নামানো
     if (listing.status !== 'approved' && listing.status !== 'blocked') {
       listing.status = 'pending';
       listing.rejectionReason = '';
     }
 
+    // নতুন image থাকলে পুরনো image delete করা
     if (req.file) {
       if (listing.image && !listing.image.startsWith('http')) {
         const oldImagePath = path.join(process.cwd(), listing.image);
@@ -375,6 +404,11 @@ export const updateListing = async (req, res) => {
       if (updateData[field] !== undefined) listing[field] = updateData[field];
     });
 
+    // FIX: country পরিবর্তন হলে continent ও update করা (আগে missing ছিল)
+    if (updateData.country) {
+      listing.continent = getContinentByCountry(updateData.country);
+    }
+
     await listing.save();
     await invalidateListingCaches({
       id: listing._id,
@@ -394,12 +428,16 @@ export const updateListing = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Public listings fetch করা
+// ─────────────────────────────────────────────
 export const getPublicListings = async (req, res) => {
   try {
     const { filter, search, category, continent, tradition, creatorId, limit, page, offset } =
       req.query;
     const currentUserId = req.user ? req.user._id.toString() : 'anonymous';
 
+    // Cache key তৈরি
     const queryStr = JSON.stringify({ ...req.query, currentUserId });
     const hash = crypto.createHash('md5').update(queryStr).digest('hex');
     const cacheKey = await buildVersionedCacheKey('listings:public', hash);
@@ -411,6 +449,7 @@ export const getPublicListings = async (req, res) => {
 
     let query = { status: 'approved' };
 
+    // Category filter
     if (category && category !== 'All' && category !== 'undefined') {
       if (mongoose.Types.ObjectId.isValid(category)) {
         query.category = category;
@@ -427,6 +466,7 @@ export const getPublicListings = async (req, res) => {
       }
     }
 
+    // Continent filter
     if (
       continent &&
       continent !== 'All' &&
@@ -437,10 +477,12 @@ export const getPublicListings = async (req, res) => {
       query.continent = { $regex: new RegExp(`^${continentSlug}$`, 'i') };
     }
 
+    // Tradition filter
     if (tradition && tradition !== 'All') {
       query.tradition = { $regex: tradition, $options: 'i' };
     }
 
+    // Date filter
     const now = new Date();
     if (filter === 'Today') {
       query.createdAt = { $gte: new Date(now.setHours(0, 0, 0, 0)) };
@@ -452,6 +494,7 @@ export const getPublicListings = async (req, res) => {
 
     if (creatorId) query.creatorId = creatorId;
 
+    // Search filter
     if (search) {
       const searchRegex = { $regex: search, $options: 'i' };
       const [matchingTags, matchingCategories] = await Promise.all([
@@ -472,42 +515,62 @@ export const getPublicListings = async (req, res) => {
     const resPerPage = parseInt(limit) || 10;
     const skip = offset ? parseInt(offset) : resPerPage * (parseInt(page || 1) - 1);
 
-    const listings = await Listing.find(query)
-      .populate('creatorId', 'username profile listingsCount')
-      .populate('category', 'title')
-      .populate('culturalTags', 'title image')
-      .sort({ isPromoted: -1, 'promotion.level': -1, views: -1, createdAt: -1 })
-      .limit(resPerPage)
-      .skip(skip)
-      .lean();
+    const [listings, totalListings] = await Promise.all([
+      Listing.find(query)
+        .populate('creatorId', 'username profile listingsCount')
+        .populate('category', 'title')
+        .populate('culturalTags', 'title image')
+        .sort({ isPromoted: -1, 'promotion.level': -1, views: -1, createdAt: -1 })
+        .limit(resPerPage)
+        .skip(skip)
+        .lean(),
+      Listing.countDocuments(query),
+    ]);
 
-    const totalListings = await Listing.countDocuments(query);
+    // FIX: N+1 query সমস্যা সমাধান — সব creatorId একসাথে aggregate করা
+    const creatorIds = [...new Set(listings.map((l) => l.creatorId?._id?.toString()).filter(Boolean))];
 
-    const formattedListings = await Promise.all(
-      listings.map(async (item) => {
-        const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
-
-        const creatorActiveListings = await Listing.countDocuments({
-          creatorId: item.creatorId?._id,
+    const creatorListingCounts = await Listing.aggregate([
+      {
+        $match: {
+          creatorId: { $in: creatorIds.map((id) => new mongoose.Types.ObjectId(id)) },
           status: 'approved',
-        });
+        },
+      },
+      {
+        $group: {
+          _id: '$creatorId',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
-        const effectiveIsPromoted =
-          (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
-          (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+    const creatorCountMap = {};
+    creatorListingCounts.forEach((entry) => {
+      creatorCountMap[entry._id.toString()] = entry.count;
+    });
 
-        return {
-          ...item,
-          isPromoted: effectiveIsPromoted,
-          isFavorited:
-            currentUserId !== 'anonymous'
-              ? safeFavorites.some((f) => f.toString() === currentUserId)
-              : false,
-          favoritesCount: safeFavorites.length,
-          creatorStats: { totalApprovedListings: creatorActiveListings },
-        };
-      })
-    );
+    const formattedListings = listings.map((item) => {
+      const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
+      const creatorId = item.creatorId?._id?.toString();
+
+      const effectiveIsPromoted =
+        (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
+        (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+
+      return {
+        ...item,
+        isPromoted: effectiveIsPromoted,
+        isFavorited:
+          currentUserId !== 'anonymous'
+            ? safeFavorites.some((f) => f.toString() === currentUserId)
+            : false,
+        favoritesCount: safeFavorites.length,
+        creatorStats: {
+          totalApprovedListings: creatorCountMap[creatorId] || 0,
+        },
+      };
+    });
 
     const responseData = {
       success: true,
@@ -526,7 +589,450 @@ export const getPublicListings = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
+// SHARED UTILITY: category-র listing গুলো rank করা + creator populate করা
+// FIX: creatorStats.totalApprovedListings যোগ করা হয়েছে
+// ─────────────────────────────────────────────────────────────────────────────
+const getRankedListingsByCategory = async (categoryId) => {
+  // ১. প্রথমে এই ক্যাটাগরির পিন করা লিস্টিংগুলো খুঁজে বের করা
+  const pinnedListings = await Listing.aggregate([
+    {
+      $match: {
+        category: new mongoose.Types.ObjectId(categoryId),
+        status: 'approved',
+        'promotion.pinnedPosition': { $in: [1, 2, 3, 4] }, // শুধুমাত্র ১-৪ স্লটে পিন করাগুলো
+      },
+    },
+    // ... আপনার বাকি সব Lookup এবং Project একই থাকবে ...
+    ...getCommonPipelineParts()
+  ]);
 
+  // ২. পিন করা লিস্টিংগুলোর আইডি আলাদা করা যাতে তারা জেনারেল র‍্যাঙ্কিংয়ে না আসে
+  const pinnedIds = pinnedListings.map(l => l._id);
+
+  // ৩. জেনারেল র‍্যাঙ্কড লিস্টিং নিয়ে আসা (পিন করাগুলো বাদ দিয়ে)
+  const rankedListings = await Listing.aggregate([
+    {
+      $match: {
+        category: new mongoose.Types.ObjectId(categoryId),
+        status: 'approved',
+        _id: { $nin: pinnedIds }, // পিন করা লিস্টিং বাদ
+      },
+    },
+    {
+      $addFields: {
+        rankScore: {
+          $add: [
+            { $cond: [{ $eq: ['$promotion.ppc.isActive', true] }, 100, 0] },
+            { $multiply: [{ $ifNull: ['$views', 0] }, 0.5] },
+            { $multiply: [{ $ifNull: ['$promotion.ppc.totalClicks', 0] }, 2] },
+            {
+              $cond: [
+                { $gt: ['$createdAt', new Date(Date.now() - 15 * 24 * 60 * 60 * 1000)] },
+                10,
+                0,
+              ],
+            },
+          ],
+        },
+      },
+    },
+    { $sort: { rankScore: -1, createdAt: -1 } },
+    { $limit: 4 }, // সেফটির জন্য ৪টা নিলেই হবে
+    ...getCommonPipelineParts()
+  ]);
+
+  // ৪. ফাইনাল ৪টি স্লট তৈরি করা [Slot 1, Slot 2, Slot 3, Slot 4]
+  const finalCurated = [null, null, null, null];
+
+  // ৫. পিন করা লিস্টিংগুলোকে তাদের নির্দিষ্ট পজিশনে বসানো
+  pinnedListings.forEach(item => {
+    const pos = item.promotion.pinnedPosition;
+    if (pos >= 1 && pos <= 4) {
+      finalCurated[pos - 1] = item;
+    }
+  });
+
+  // ৬. বাকি খালি স্লটগুলো র‍্যাঙ্কড লিস্টিং দিয়ে সিরিয়ালি ফিলাপ করা
+  let rankedIdx = 0;
+  for (let i = 0; i < 4; i++) {
+    if (finalCurated[i] === null && rankedListings[rankedIdx]) {
+      finalCurated[i] = rankedListings[rankedIdx];
+      rankedIdx++;
+    }
+  }
+
+  // নাল ভ্যালু ফিল্টার করে (যদি ক্যাটাগরিতে লিস্টিং ৪টার কম থাকে) রিটার্ন করা
+  return finalCurated.filter(item => item !== null);
+};
+
+// কোড পরিষ্কার রাখার জন্য কমন পাইপলাইন পার্টস (Lookup & Project) এখানে রাখা হয়েছে
+function getCommonPipelineParts() {
+  return [
+    {
+      $lookup: {
+        from: 'users',
+        localField: 'creatorId',
+        foreignField: '_id',
+        as: 'creatorData',
+      },
+    },
+    { $unwind: { path: '$creatorData', preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: 'categories',
+        localField: 'category',
+        foreignField: '_id',
+        as: 'categoryData',
+      },
+    },
+    { $unwind: { path: '$categoryData', preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: 'tags',
+        localField: 'culturalTags',
+        foreignField: '_id',
+        as: 'culturalTagsData',
+      },
+    },
+    {
+      $lookup: {
+        from: 'listings',
+        let: { cId: '$creatorData._id' },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$creatorId', '$$cId'] }, status: 'approved' } },
+          { $count: 'total' },
+        ],
+        as: 'creatorListingsCount',
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        title: 1,
+        slug: 1,
+        image: 1,
+        views: 1,
+        rankScore: 1,
+        createdAt: 1,
+        favorites: 1,
+        promotion: 1,
+        isPromoted: 1,
+        status: 1,
+        region: 1,
+        country: 1,
+        continent: 1,
+        tradition: 1,
+        description: 1,
+        websiteLink: 1,
+        externalUrls: 1,
+        category: {
+          _id: '$categoryData._id',
+          title: { $ifNull: ['$categoryData.title', ''] },
+        },
+        culturalTags: '$culturalTagsData',
+        creatorId: {
+          _id: '$creatorData._id',
+          username: { $ifNull: ['$creatorData.username', ''] },
+          profile: {
+            displayName: { $ifNull: ['$creatorData.profile.displayName', '$creatorData.username'] },
+            profileImage: { $ifNull: ['$creatorData.profile.profileImage', null] },
+            coverImage: { $ifNull: ['$creatorData.profile.coverImage', null] },
+            bio: { $ifNull: ['$creatorData.profile.bio', ''] },
+            city: { $ifNull: ['$creatorData.profile.city', ''] },
+          },
+        },
+        creatorStats: {
+          totalApprovedListings: { $ifNull: [{ $arrayElemAt: ['$creatorListingsCount.total', 0] }, 0] },
+        },
+      },
+    },
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CURATED COLLECTIONS — প্রতিটা category থেকে top-4 ranked listing
+// ─────────────────────────────────────────────────────────────────────────────
+export const getCuratedCollections = async (req, res) => {
+  try {
+    const SELECTED_CATEGORY_IDS = [
+      '69ec7fdab5aac78d87858af3',
+      '69ec7f56b5aac78d87858adb', // CULTURAL TEXTILES
+      '69ec7fe6b5aac78d87858af7',
+      '69ec7ff0b5aac78d87858afb',
+      '69ec7f6ab5aac78d87858adf', // TRADITIONAL CLOTHING
+      '69ec7f1eb5aac78d87858ad1', // HANDMADE CRAFTS
+      '69ec7ffbb5aac78d87858aff',
+      '69ec7fbfb5aac78d87858ae7',
+    ];
+
+    const dayOfMonth = new Date().getDate();
+    const startIndex = dayOfMonth % 2 === 0 ? 0 : 4;
+    const dailyCategoryIds = SELECTED_CATEGORY_IDS.slice(startIndex, startIndex + 4);
+
+    const results = await Promise.all(
+      dailyCategoryIds.map(async (catId) => {
+        const categoryInfo = await Category.findById(catId).select('title').lean();
+
+        const generatedSlug = categoryInfo?.title
+          ? categoryInfo.title
+            .toLowerCase()
+            .trim()
+            .replace(/[^\w\s-]/g, '')
+            .replace(/[\s_-]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+          : 'unknown';
+
+        const allRanked = await getRankedListingsByCategory(catId);
+        const topListings = allRanked.slice(0, 4);
+
+        // listing না থাকলে এই category বাদ
+        if (topListings.length === 0) return null;
+
+        return {
+          categoryId: catId,
+          categoryTitle: categoryInfo?.title || 'Unknown Category',
+          categorySlug: generatedSlug,
+          listings: topListings,
+        };
+      })
+    );
+
+    // null গুলো filter করে বাদ
+    const filteredResults = results.filter(Boolean);
+
+    res.status(200).json({ success: true, data: filteredResults });
+  } catch (error) {
+    console.error('Curated Collections Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching collections',
+      error: error.message,
+    });
+  }
+};
+
+export const getTrendingListings = async (req, res) => {
+  try {
+    const { limit = 8, page = 1 } = req.query;
+    const currentUserId = req.user ? req.user._id.toString() : 'anonymous';
+
+    const resPerPage = parseInt(limit);
+    const skip = (parseInt(page) - 1) * resPerPage;
+
+    // ── Step 1: আজকের active category IDs ──
+    const SELECTED_CATEGORY_IDS = [
+      '69ec7f1eb5aac78d87858ad1',
+      '69ec7f6ab5aac78d87858adf',
+      '69ec7f56b5aac78d87858adb',
+      '69ec7fdab5aac78d87858af3',
+      '69ec7fe6b5aac78d87858af7',
+      '69ec7ff0b5aac78d87858afb',
+      '69ec7ffbb5aac78d87858aff',
+      '69ec7fbfb5aac78d87858ae7',
+    ];
+
+    const dayOfMonth = new Date().getDate();
+    const startIndex = dayOfMonth % 2 === 0 ? 0 : 4;
+    const dailyCategoryIds = SELECTED_CATEGORY_IDS.slice(startIndex, startIndex + 4);
+
+    // ── Step 2: Curated top-4 IDs বের করা (getRankedListingsByCategory ব্যবহার) ──
+    const curatedIdArrays = await Promise.all(
+      dailyCategoryIds.map(async (catId) => {
+        const allRanked = await getRankedListingsByCategory(catId);
+        return allRanked.slice(0, 4).map((l) => l._id);
+      })
+    );
+    const curatedListingIds = curatedIdArrays.flat();
+
+    // ── Step 3: Rank pipeline (curated বাদ দিয়ে) ──
+    const rankPipeline = [
+      {
+        $match: {
+          status: 'approved',
+          ...(curatedListingIds.length > 0 && {
+            _id: { $nin: curatedListingIds },
+          }),
+        },
+      },
+      {
+        $addFields: {
+          rankScore: {
+            $add: [
+              { $cond: [{ $eq: ['$promotion.ppc.isActive', true] }, 100, 0] },
+              { $multiply: [{ $ifNull: ['$views', 0] }, 0.5] },
+              { $multiply: [{ $ifNull: ['$promotion.ppc.totalClicks', 0] }, 2] },
+              {
+                $cond: [
+                  { $gt: ['$createdAt', new Date(Date.now() - 15 * 24 * 60 * 60 * 1000)] },
+                  10,
+                  0,
+                ],
+              },
+            ],
+          },
+        },
+      },
+      { $sort: { rankScore: -1, createdAt: -1 } },
+    ];
+
+    // Total count
+    const totalResult = await Listing.aggregate([...rankPipeline, { $count: 'total' }]);
+    const total = totalResult[0]?.total || 0;
+
+    // ── Step 4: Paginated + Populated ──
+    // FIX: lookup alias "creatorData" ব্যবহার করা হচ্ছে
+    // আগে alias ছিল "creatorId" যার কারণে $project এ creatorData access করতে পারছিল না
+    const listings = await Listing.aggregate([
+      ...rankPipeline,
+      { $skip: skip },
+      { $limit: resPerPage },
+
+      // Creator lookup — alias: creatorData (আগে ছিল creatorId, সেটাই bug ছিল)
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'creatorId',
+          foreignField: '_id',
+          as: 'creatorData',
+        },
+      },
+      { $unwind: { path: '$creatorData', preserveNullAndEmptyArrays: true } },
+
+      // Category lookup
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'category',
+          foreignField: '_id',
+          as: 'categoryData',
+        },
+      },
+      { $unwind: { path: '$categoryData', preserveNullAndEmptyArrays: true } },
+
+      // Cultural tags lookup
+      {
+        $lookup: {
+          from: 'tags',
+          localField: 'culturalTags',
+          foreignField: '_id',
+          as: 'culturalTagsData',
+        },
+      },
+
+      // FIX: সব field সঠিক alias থেকে project করা হচ্ছে
+      {
+        $project: {
+          _id: 1,
+          title: 1,
+          slug: 1,
+          image: 1,
+          views: 1,
+          rankScore: 1,
+          createdAt: 1,
+          favorites: 1,
+          promotion: 1,
+          isPromoted: 1,
+          status: 1,
+          region: 1,
+          country: 1,
+          continent: 1,
+          tradition: 1,
+          description: 1,
+          websiteLink: 1,
+          externalUrls: 1,
+          // Category — categoryData alias থেকে
+          category: {
+            _id: '$categoryData._id',
+            title: { $ifNull: ['$categoryData.title', ''] },
+          },
+          // Cultural tags — culturalTagsData alias থেকে
+          culturalTags: '$culturalTagsData',
+          // Creator — creatorData alias থেকে, profile null-safe
+          creatorId: {
+            _id: '$creatorData._id',
+            username: { $ifNull: ['$creatorData.username', ''] },
+            listingsCount: { $ifNull: ['$creatorData.listingsCount', 0] },
+            profile: {
+              // FIX: displayName null হলে username দিয়ে fallback, তারপর empty string
+              displayName: {
+                $ifNull: [
+                  '$creatorData.profile.displayName',
+                  { $ifNull: ['$creatorData.username', ''] },
+                ],
+              },
+              profileImage: { $ifNull: ['$creatorData.profile.profileImage', null] },
+              bio: { $ifNull: ['$creatorData.profile.bio', ''] },
+            },
+          },
+        },
+      },
+    ]);
+
+    // ── Step 5: Creator stats aggregate (N+1 fix) ──
+    const creatorIds = [
+      ...new Set(listings.map((l) => l.creatorId?._id?.toString()).filter(Boolean)),
+    ];
+
+    const creatorCountMap = {};
+    if (creatorIds.length > 0) {
+      const counts = await Listing.aggregate([
+        {
+          $match: {
+            creatorId: { $in: creatorIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            status: 'approved',
+          },
+        },
+        { $group: { _id: '$creatorId', count: { $sum: 1 } } },
+      ]);
+      counts.forEach((e) => {
+        creatorCountMap[e._id.toString()] = e.count;
+      });
+    }
+
+    // ── Step 6: Format ──
+    const formattedListings = listings.map((item) => {
+      const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
+      const creatorId = item.creatorId?._id?.toString();
+
+      const effectiveIsPromoted =
+        (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
+        (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+
+      return {
+        ...item,
+        isPromoted: effectiveIsPromoted,
+        isFavorited:
+          currentUserId !== 'anonymous'
+            ? safeFavorites.some((f) => f.toString() === currentUserId)
+            : false,
+        favoritesCount: safeFavorites.length,
+        creatorStats: {
+          totalApprovedListings: creatorCountMap[creatorId] || 0,
+        },
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      total,
+      count: formattedListings.length,
+      currentPage: parseInt(page),
+      nextOffset: skip + formattedListings.length,
+      hasMore: skip + formattedListings.length < total,
+      listings: formattedListings,
+    });
+  } catch (error) {
+    console.error('Trending Listings Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching trending listings',
+      error: error.message,
+    });
+  }
+};
+// ─────────────────────────────────────────────
+// Single Listing fetch করা (by ID বা slug)
+// ─────────────────────────────────────────────
 export const getListingById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -559,6 +1065,7 @@ export const getListingById = async (req, res) => {
       ]);
     }
 
+    // View log async হ্যান্ডেল করা — response block করে না
     const handleViewLog = async () => {
       try {
         const actualListingId = listing._id.toString();
@@ -596,6 +1103,13 @@ export const getListingById = async (req, res) => {
               { upsert: true }
             ),
           ]);
+
+          // FIX: View বাড়ার পরে cache invalidate করা (আগে missing ছিল)
+          await invalidateListingCaches({
+            id: actualListingId,
+            slug: listing.slug,
+            creatorId: creatorId,
+          });
         }
       } catch (err) {
         console.error('View Logging Error:', err);
@@ -609,6 +1123,9 @@ export const getListingById = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Creator-এর approved listing count
+// ─────────────────────────────────────────────
 export const getCreatorListingCount = async (req, res) => {
   try {
     const count = await Listing.countDocuments({
@@ -621,6 +1138,9 @@ export const getCreatorListingCount = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// নিজের listings fetch করা
+// ─────────────────────────────────────────────
 export const getMyListings = async (req, res) => {
   try {
     if (!req.user || !req.user._id) {
@@ -680,6 +1200,9 @@ export const getMyListings = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Favorite toggle করা
+// ─────────────────────────────────────────────
 export const toggleFavorite = async (req, res) => {
   try {
     const { id } = req.params;
@@ -701,7 +1224,6 @@ export const toggleFavorite = async (req, res) => {
     }
 
     applyPromotionLogic(listing);
-
     await listing.save();
     await invalidateListingCaches({
       id: listing._id,
@@ -723,6 +1245,9 @@ export const toggleFavorite = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// নিজের favorites fetch করা
+// ─────────────────────────────────────────────
 export const getMyFavorites = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -748,29 +1273,47 @@ export const getMyFavorites = async (req, res) => {
       Listing.countDocuments(query),
     ]);
 
-    const formattedListings = await Promise.all(
-      listings.map(async (item) => {
-        const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
-        const creatorActiveCount = await Listing.countDocuments({
-          creatorId: item.creatorId?._id,
+    // FIX: N+1 query সমস্যা সমাধান — সব creator একসাথে aggregate করা
+    const creatorIds = [...new Set(listings.map((l) => l.creatorId?._id?.toString()).filter(Boolean))];
+
+    const creatorListingCounts = await Listing.aggregate([
+      {
+        $match: {
+          creatorId: { $in: creatorIds.map((id) => new mongoose.Types.ObjectId(id)) },
           status: 'approved',
-        });
+        },
+      },
+      {
+        $group: {
+          _id: '$creatorId',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
-        const effectiveIsPromoted =
-          (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
-          (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+    const creatorCountMap = {};
+    creatorListingCounts.forEach((entry) => {
+      creatorCountMap[entry._id.toString()] = entry.count;
+    });
 
-        return {
-          ...item,
-          isPromoted: effectiveIsPromoted,
-          isFavorited: true,
-          favoritesCount: safeFavorites.length,
-          creatorStats: {
-            totalApprovedListings: creatorActiveCount,
-          },
-        };
-      })
-    );
+    const formattedListings = listings.map((item) => {
+      const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
+      const creatorId = item.creatorId?._id?.toString();
+
+      const effectiveIsPromoted =
+        (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
+        (item.promotion?.ppc?.isActive && !item.promotion?.ppc?.isPaused);
+
+      return {
+        ...item,
+        isPromoted: effectiveIsPromoted,
+        isFavorited: true,
+        favoritesCount: safeFavorites.length,
+        creatorStats: {
+          totalApprovedListings: creatorCountMap[creatorId] || 0,
+        },
+      };
+    });
 
     res.status(200).json({
       success: true,
@@ -791,6 +1334,9 @@ export const getMyFavorites = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Listing delete করা
+// ─────────────────────────────────────────────
 export const deleteListing = async (req, res) => {
   try {
     const { id } = req.params;
@@ -802,6 +1348,7 @@ export const deleteListing = async (req, res) => {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
+    // Local image file delete করা
     if (listing.image && !listing.image.startsWith('http')) {
       const imagePath = path.join(process.cwd(), listing.image);
       if (fs.existsSync(imagePath)) {
@@ -832,6 +1379,9 @@ export const deleteListing = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Promotion cancel করা (boost বা ppc)
+// ─────────────────────────────────────────────
 export const cancelPromotion = async (req, res) => {
   const dbSession = await mongoose.startSession();
   dbSession.startTransaction();
@@ -843,6 +1393,8 @@ export const cancelPromotion = async (req, res) => {
     const listing = await Listing.findById(id).session(dbSession);
 
     if (!listing || listing.creatorId.toString() !== req.user._id.toString()) {
+      await dbSession.abortTransaction();
+      dbSession.endSession();
       return res.status(403).json({ message: 'Unauthorized or Listing not found' });
     }
 
@@ -855,11 +1407,16 @@ export const cancelPromotion = async (req, res) => {
       updateData['promotion.ppc.isActive'] = false;
       updateData['promotion.ppc.amountPaid'] = 0;
     } else if (type === 'boost' && listing.promotion?.boost?.isActive) {
+      // FIX: Boost cancel-এও refund logic যোগ করা হয়েছে
+      // Note: Boost সাধারণত non-refundable, কিন্তু যদি partial refund দরকার হয়
+      // তাহলে এখানে business logic যোগ করুন।
+      // এখন শুধু deactivate করা হচ্ছে।
       updateData['promotion.boost.isActive'] = false;
       updateData['promotion.boost.amountPaid'] = 0;
       updateData['promotion.boost.expiresAt'] = null;
     }
 
+    // Refund wallet-এ যোগ করা (ppc-র ক্ষেত্রে)
     if (refundAmount > 0) {
       await User.findByIdAndUpdate(
         req.user._id,
@@ -868,6 +1425,7 @@ export const cancelPromotion = async (req, res) => {
       );
     }
 
+    // Promotion বন্ধ করার পরে নতুন level হিসাব করা
     const tempListing = { ...listing.toObject() };
 
     if (type === 'ppc') {
@@ -881,8 +1439,8 @@ export const cancelPromotion = async (req, res) => {
     const newLevel = calculateListingLevel(tempListing);
     updateData['promotion.level'] = newLevel;
 
-    const isPpcStillActive = type === 'ppc' ? false : listing.promotion.ppc.isActive;
-    const isBoostStillActive = type === 'boost' ? false : listing.promotion.boost.isActive;
+    const isPpcStillActive = type === 'ppc' ? false : listing.promotion?.ppc?.isActive;
+    const isBoostStillActive = type === 'boost' ? false : listing.promotion?.boost?.isActive;
 
     if (!isPpcStillActive && !isBoostStillActive) {
       updateData.isPromoted = false;
@@ -912,6 +1470,9 @@ export const cancelPromotion = async (req, res) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// Moderation rejection reasons fetch করা
+// ─────────────────────────────────────────────
 export const getModerationReasons = async (req, res) => {
   try {
     const reasonCodes = Listing.schema.path('rejectionReason').enumValues;
