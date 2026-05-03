@@ -835,11 +835,12 @@ export const getTrendingListings = async (req, res) => {
     const startIndex = dayOfMonth % 2 === 0 ? 0 : 4;
     const dailyCategoryIds = SELECTED_CATEGORY_IDS.slice(startIndex, startIndex + 4);
 
-    // ── Step 2: Curated top-4 IDs বের করা (getRankedListingsByCategory ব্যবহার) ──
+    // ── Step 2: Curated top-4 IDs বের করা এবং ObjectId তে কনভার্ট করা ──
     const curatedIdArrays = await Promise.all(
       dailyCategoryIds.map(async (catId) => {
         const allRanked = await getRankedListingsByCategory(catId);
-        return allRanked.slice(0, 4).map((l) => l._id);
+        // নিশ্চিত করছি আইডিগুলো যেন Mongoose ObjectId ফরম্যাটে থাকে
+        return allRanked.slice(0, 4).map((l) => new mongoose.Types.ObjectId(l._id));
       })
     );
     const curatedListingIds = curatedIdArrays.flat();
@@ -849,6 +850,7 @@ export const getTrendingListings = async (req, res) => {
       {
         $match: {
           status: 'approved',
+          // কিউরেটেড আইডিগুলো ট্রেন্ডিং থেকে বাদ দেওয়া হচ্ছে
           ...(curatedListingIds.length > 0 && {
             _id: { $nin: curatedListingIds },
           }),
@@ -875,19 +877,17 @@ export const getTrendingListings = async (req, res) => {
       { $sort: { rankScore: -1, createdAt: -1 } },
     ];
 
-    // Total count
+    // Total count বের করা
     const totalResult = await Listing.aggregate([...rankPipeline, { $count: 'total' }]);
     const total = totalResult[0]?.total || 0;
 
     // ── Step 4: Paginated + Populated ──
-    // FIX: lookup alias "creatorData" ব্যবহার করা হচ্ছে
-    // আগে alias ছিল "creatorId" যার কারণে $project এ creatorData access করতে পারছিল না
     const listings = await Listing.aggregate([
       ...rankPipeline,
       { $skip: skip },
       { $limit: resPerPage },
 
-      // Creator lookup — alias: creatorData (আগে ছিল creatorId, সেটাই bug ছিল)
+      // Creator lookup
       {
         $lookup: {
           from: 'users',
@@ -919,7 +919,7 @@ export const getTrendingListings = async (req, res) => {
         },
       },
 
-      // FIX: সব field সঠিক alias থেকে project করা হচ্ছে
+      // Project final fields
       {
         $project: {
           _id: 1,
@@ -940,20 +940,16 @@ export const getTrendingListings = async (req, res) => {
           description: 1,
           websiteLink: 1,
           externalUrls: 1,
-          // Category — categoryData alias থেকে
           category: {
             _id: '$categoryData._id',
             title: { $ifNull: ['$categoryData.title', ''] },
           },
-          // Cultural tags — culturalTagsData alias থেকে
           culturalTags: '$culturalTagsData',
-          // Creator — creatorData alias থেকে, profile null-safe
           creatorId: {
             _id: '$creatorData._id',
             username: { $ifNull: ['$creatorData.username', ''] },
             listingsCount: { $ifNull: ['$creatorData.listingsCount', 0] },
             profile: {
-              // FIX: displayName null হলে username দিয়ে fallback, তারপর empty string
               displayName: {
                 $ifNull: [
                   '$creatorData.profile.displayName',
@@ -992,7 +988,7 @@ export const getTrendingListings = async (req, res) => {
     // ── Step 6: Format ──
     const formattedListings = listings.map((item) => {
       const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
-      const creatorId = item.creatorId?._id?.toString();
+      const creatorIdStr = item.creatorId?._id?.toString();
 
       const effectiveIsPromoted =
         (item.promotion?.boost?.isActive && !item.promotion?.boost?.isPaused) ||
@@ -1007,7 +1003,7 @@ export const getTrendingListings = async (req, res) => {
             : false,
         favoritesCount: safeFavorites.length,
         creatorStats: {
-          totalApprovedListings: creatorCountMap[creatorId] || 0,
+          totalApprovedListings: creatorCountMap[creatorIdStr] || 0,
         },
       };
     });

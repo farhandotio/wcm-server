@@ -12,6 +12,7 @@ import mongoose from 'mongoose';
 import Visitor from '../models/Visitor.js';
 import Region from '../models/Region.js';
 import Tradition from '../models/Tradition.js';
+import HowItWork from '../models/howItWork.js';
 import {
   invalidateListingCaches,
   invalidateMetaCaches,
@@ -166,6 +167,38 @@ export const createTag = async (req, res) => {
     if (error.code === 11000) {
       return res.status(400).json({ message: 'This tag already exists in this category' });
     }
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get How It Works Content
+export const getPageContent = async (req, res) => {
+  try {
+    // ডাটাবেজে খোঁজ করা হচ্ছে
+    let content = await HowItWork.findOne({ pageName: 'how-it-works' });
+
+    // যদি ডাটা না থাকে, তবে মডেলে দেওয়া default value দিয়ে একটি নতুন ডাটা তৈরি হবে
+    if (!content) {
+      content = await HowItWork.create({ pageName: 'how-it-works' });
+    }
+
+    res.status(200).json(content);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Update How It Works Content
+export const updatePageContent = async (req, res) => {
+  const { headerTitle, headerDescription, steps } = req.body;
+  try {
+    const updatedContent = await HowItWork.findOneAndUpdate(
+      { pageName: 'how-it-works' },
+      { headerTitle, headerDescription, steps },
+      { new: true, upsert: true }
+    );
+    res.status(200).json(updatedContent);
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };

@@ -38,6 +38,8 @@ import {
   createTradition,
   updateTradition,
   deleteTradition,
+  getPageContent,
+  updatePageContent,
   // --- Combined Asset ---
   getCategoryAssets
 } from '../controllers/adminController.js';
@@ -54,11 +56,20 @@ router.get('/tags/by-category/:categoryId', getTagsByCategory);
 router.get('/regions/by-category/:categoryId', getRegionsByCategory);
 router.get('/traditions/by-category/:categoryId', getTraditionsByCategory);
 router.get('/category-assets/:categoryId', getCategoryAssets);
+// ১. পাবলিক রাউট (মেটাডেটা বা পেজ লোডের জন্য)
+router.get('/how-it-works', getPageContent);
 
 // --- ২. অ্যাডমিন অথোরাইজেশন মিডলওয়্যার ---
 // নিচের সব রাউটের জন্য এই মিডলওয়্যারগুলো অটোমেটিক অ্যাপ্লাই হবে
 router.use(authMiddleware);
 router.use(authorizeRoles('admin'));
+
+// পাবলিকলি ডাটা দেখার জন্য
+router.put('/how-it-works', updatePageContent);
+
+// অ্যাডমিন প্যানেল থেকে আপডেট করার জন্য
+// এখানে আপনার মিডলওয়্যার (যেমন: verifyAdmin) যোগ করা উচিত
+router.put('/how-it-works', updatePageContent);
 
 // --- ৩. স্ট্যাটস ও ট্রানজেকশন ---
 router.get('/stats', getAdminStats);

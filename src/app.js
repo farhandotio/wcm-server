@@ -31,17 +31,14 @@ const __dirname = path.resolve();
 // --- Middlewares ---
 const clientURL = process.env.CLIENT_URL;
 
-// লোকালহোস্ট এবং প্রোডাকশন ইউআরএল উভয়কেই অ্যারেতে রাখুন
 const allowedOrigins = [
   'http://localhost:3000',
   clientURL,
-  // যদি সাবডোমেন সাপোর্ট দরকার হয়, তবে এভাবে ডাইনামিকলি চেক করতে হয়
-].filter(Boolean); // null বা undefined ভ্যালু রিমুভ করার জন্য
+].filter(Boolean); 
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      // যদি রিকোয়েস্টের অরিজিন allowedOrigins লিস্টে থাকে অথবা অরিজিন না থাকে (যেমন Postman/Server-side)
       if (!origin || allowedOrigins.indexOf(origin) !== -1 || origin.endsWith(clientURL?.split('://')[1])) {
         callback(null, true);
       } else {
