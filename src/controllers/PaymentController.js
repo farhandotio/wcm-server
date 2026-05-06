@@ -15,6 +15,7 @@ import {
 } from '../utils/promotionHelper.js';
 import { calculateVAT } from '../utils/vatHelper.js';
 import AuditLog from '../models/AuditLog.js';
+import { BOOST_PACKAGES, PPC_CONFIG } from '../constants/promotion.js';
 
 const getExchangeRate = async (fromCurrency, toCurrency) => {
   try {
@@ -193,8 +194,27 @@ export const handleStripeWebhook = async (req, res) => {
 };
 
 export const purchasePromotion = async (req, res) => {
-  const { listingId, packageType, amountInEUR, days, totalClicks } = req.body;
+  const { listingId, packageType, amountInEUR, days, totalClicks, packageId } = req.body;
   const userId = req.user._id;
+
+  //validation
+  if (packageType === 'boost') {
+    const validPackage = BOOST_PACKAGES[packageId];
+    if (!validPackage || validPackage.price !== amountInEUR || validPackage.days !== days) {
+      return res.status(400).json({ success: false, message: 'Invalid Boost Package data.' });
+    }
+  } else if (packageType === 'ppc') {
+    if (amountInEUR < PPC_CONFIG.MIN_AMOUNT) {
+      return res
+        .status(400)
+        .json({ success: false, message: `Minimum PPC budget is €${PPC_CONFIG.MIN_AMOUNT}` });
+    }
+    
+    const expectedClicks = Math.floor(amountInEUR / PPC_CONFIG.COST_PER_CLICK);
+    if (totalClicks !== expectedClicks) {
+      return res.status(400).json({ success: false, message: 'PPC Click calculation mismatch.' });
+    }
+  }
 
   const dbSession = await mongoose.startSession();
   dbSession.startTransaction();

@@ -19,7 +19,7 @@ import seoRoutes from './routes/seoRoutes.js';
 import footerRoutes from './routes/footerRoutes.js';
 import logRoutes from './routes/logRoutes.js';
 import { logger } from './utils/logger.js';
-import emailRoutes from "./routes/subscriptionEmails.js"
+import emailRoutes from './routes/subscriptionEmails.js';
 
 // --- New About Route (Based on our Discussion) ---
 import aboutRoutes from './routes/aboutRoutes.js';
@@ -34,15 +34,16 @@ const __dirname = path.resolve();
 // --- Middlewares ---
 const clientURL = process.env.CLIENT_URL;
 
-const allowedOrigins = [
-  'http://localhost:3000',
-  clientURL,
-].filter(Boolean); 
+const allowedOrigins = ['http://localhost:3000', clientURL].filter(Boolean);
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.indexOf(origin) !== -1 || origin.endsWith(clientURL?.split('://')[1])) {
+      if (
+        !origin ||
+        allowedOrigins.indexOf(origin) !== -1 ||
+        origin.endsWith(clientURL?.split('://')[1])
+      ) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
@@ -109,7 +110,7 @@ app.get('/', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
-  const message = err.message || "Internal Server Error";
+  const message = err.message || 'Internal Server Error';
   res.status(statusCode).json({
     success: false,
     statusCode,

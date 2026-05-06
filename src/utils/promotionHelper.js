@@ -31,37 +31,66 @@ export const checkAndCleanupExpiry = (listing) => {
   }
 };
 
+// export const applyPromotionLogic = (listing) => {
+//   checkAndCleanupExpiry(listing);
+//   let boostScore = 0;
+//   let ppcScore = 0;
+//   const now = new Date();
+
+//   if (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) {
+//     const totalAmount = listing.promotion.boost.amountPaid || 0;
+//     const expiry = new Date(listing.promotion.boost.expiresAt);
+
+//     const timeDiff = expiry.getTime() - now.getTime();
+//     const daysRemaining = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)) || 1;
+
+//     boostScore = (totalAmount / Math.max(daysRemaining, 1)) * 10;
+//   }
+
+//   if (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused) {
+//     const cpc = listing.promotion.ppc.costPerClick || 0.1;
+//     const balance = listing.promotion.ppc.ppcBalance || 0;
+//     ppcScore = cpc * 40 + balance * 0.5;
+//   }
+
+//   listing.promotion.level = Math.floor(boostScore + ppcScore);
+
+//   listing.isPromoted =
+//     (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) ||
+//     (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused);
+
+//   if (!listing.isPromoted) {
+//     listing.promotion.level = 0;
+//   }
+
+//   return listing;
+// };
+
 export const applyPromotionLogic = (listing) => {
-  checkAndCleanupExpiry(listing);
   let boostScore = 0;
   let ppcScore = 0;
   const now = new Date();
 
   if (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) {
-    const totalAmount = listing.promotion.boost.amountPaid || 0;
+    const amount = listing.promotion.boost.amountPaid || 0;
     const expiry = new Date(listing.promotion.boost.expiresAt);
-    
-    const timeDiff = expiry.getTime() - now.getTime();
-    const daysRemaining = Math.ceil(timeDiff / (1000 * 60 * 60 * 24)) || 1;
-    
-    boostScore = (totalAmount / Math.max(daysRemaining, 1)) * 10;
+    const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24)) || 1;
+
+    boostScore = (amount / Math.max(daysRemaining, 1)) * 15;
   }
 
   if (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused) {
-    const cpc = listing.promotion.ppc.costPerClick || 0.1;
     const balance = listing.promotion.ppc.ppcBalance || 0;
-    ppcScore = (cpc * 100) + (balance * 0.5);
+    ppcScore = balance * 0.8 + 10;
   }
 
   listing.promotion.level = Math.floor(boostScore + ppcScore);
-  
-  listing.isPromoted = 
-    (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) || 
+
+  listing.isPromoted =
+    (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) ||
     (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused);
 
-  if (!listing.isPromoted) {
-    listing.promotion.level = 0;
-  }
+  if (!listing.isPromoted) listing.promotion.level = 0;
 
   return listing;
 };
