@@ -51,6 +51,14 @@ const listingSchema = new mongoose.Schema(
     favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     promotion: {
       level: { type: Number, default: 0 },
+      // ─────────────────────────────────────────────────────────────────
+      // NEW FIELD: Admin Manual Pinning (Slot 1, 2, 3, or 4)
+      // ─────────────────────────────────────────────────────────────────
+      pinnedPosition: {
+        type: Number,
+        default: null,
+        enum: [1, 2, 3, 4, null]
+      },
       boost: {
         isActive: { type: Boolean, default: false },
         isPaused: { type: Boolean, default: false },
@@ -87,9 +95,11 @@ listingSchema.index({
 });
 
 listingSchema.index({ continent: 1 });
-
 listingSchema.index({ isPromoted: 1 });
 listingSchema.index({ status: 1 });
+
+// Pinned position-এর জন্য ইনডেক্স যাতে কুয়েরি ফাস্ট হয়
+listingSchema.index({ "promotion.pinnedPosition": 1 });
 
 const Listing = mongoose.model('Listing', listingSchema);
 export default Listing;

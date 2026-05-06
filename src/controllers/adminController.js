@@ -12,6 +12,12 @@ import mongoose from 'mongoose';
 import Visitor from '../models/Visitor.js';
 import Region from '../models/Region.js';
 import Tradition from '../models/Tradition.js';
+import HowItWork from '../models/howItWork.js';
+import {
+  invalidateListingCaches,
+  invalidateMetaCaches,
+  invalidateUserProfileCaches
+} from '../utils/cache.js';
 
 // Get Regions by Category
 export const getRegionsByCategory = async (req, res) => {
@@ -140,11 +146,6 @@ export const getCategoryAssets = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-import {
-  invalidateListingCaches,
-  invalidateMetaCaches,
-  invalidateUserProfileCaches,
-} from '../utils/cache.js';
 
 export const createTag = async (req, res) => {
   try {
@@ -166,6 +167,75 @@ export const createTag = async (req, res) => {
     if (error.code === 11000) {
       return res.status(400).json({ message: 'This tag already exists in this category' });
     }
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get How It Works Content
+export const getPageContent = async (req, res) => {
+  try {
+    // ডাটাবেজে খোঁজ করা হচ্ছে
+    let content = await HowItWork.findOne({ pageName: 'how-it-works' });
+
+    // যদি ডাটা না থাকে, তবে মডেলে দেওয়া default value দিয়ে একটি নতুন ডাটা তৈরি হবে
+    if (!content) {
+      content = await HowItWork.create({ pageName: 'how-it-works' });
+    }
+
+    res.status(200).json(content);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Update How It Works Content
+export const updatePageContent = async (req, res) => {
+  const { headerTitle, headerDescription, steps } = req.body;
+  try {
+    const updatedContent = await HowItWork.findOneAndUpdate(
+      { pageName: 'how-it-works' },
+      { headerTitle, headerDescription, steps },
+      { new: true, upsert: true }
+    );
+    res.status(200).json(updatedContent);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const pinListing = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { position, categoryId } = req.body; // position: 1, 2, 3, or 4
+
+    // ১. ওই ক্যাটাগরিতে এই পজিশনে আগে কেউ পিন করা থাকলে তাকে সরিয়ে দিন (Conflict Management)
+    await Listing.updateOne(
+      {
+        category: categoryId,
+        "promotion.pinnedPosition": position
+      },
+      { $set: { "promotion.pinnedPosition": null } }
+    );
+
+    // ২. নতুন লিস্টিংটিকে ওই পজিশনে পিন করুন
+    const updatedListing = await Listing.findByIdAndUpdate(
+      id,
+      { $set: { "promotion.pinnedPosition": position } },
+      { new: true }
+    );
+
+    res.status(200).json({ message: `Listing pinned to position ${position}`, data: updatedListing });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const unpinListing = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Listing.findByIdAndUpdate(id, { $set: { "promotion.pinnedPosition": null } });
+    res.status(200).json({ message: "Listing unpinned successfully" });
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
