@@ -1025,23 +1025,25 @@ function getCommonPipelineParts() {
     },
   ];
 }
+// ============================================
+// SHARED CONSTANT (top of file or separate module)
+// ============================================
+const SELECTED_CATEGORY_IDS = [
+  '69ec7f56b5aac78d87858adb', // CULTURAL TEXTILES
+  '69ec7fdab5aac78d87858af3',
+  '69ec7fe6b5aac78d87858af7',
+  '69ec7ff0b5aac78d87858afb',
+  '69ec7f1eb5aac78d87858ad1', // HANDMADE CRAFTS
+  '69ec7f6ab5aac78d87858adf', // TRADITIONAL CLOTHING
+  '69ec7ffbb5aac78d87858aff',
+  '69ec7fbfb5aac78d87858ae7',
+];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CURATED COLLECTIONS — প্রতিটা category থেকে top-4 ranked listing
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================
+// getCuratedCollections — FIXED (uses same array)
+// ============================================
 export const getCuratedCollections = async (req, res) => {
   try {
-    const SELECTED_CATEGORY_IDS = [
-      '69ec7fdab5aac78d87858af3',
-      '69ec7f56b5aac78d87858adb', // CULTURAL TEXTILES
-      '69ec7fe6b5aac78d87858af7',
-      '69ec7ff0b5aac78d87858afb',
-      '69ec7f6ab5aac78d87858adf', // TRADITIONAL CLOTHING
-      '69ec7f1eb5aac78d87858ad1', // HANDMADE CRAFTS
-      '69ec7ffbb5aac78d87858aff',
-      '69ec7fbfb5aac78d87858ae7',
-    ];
-
     const dayOfMonth = new Date().getDate();
     const startIndex = dayOfMonth % 2 === 0 ? 0 : 4;
     const dailyCategoryIds = SELECTED_CATEGORY_IDS.slice(startIndex, startIndex + 4);
@@ -1062,7 +1064,6 @@ export const getCuratedCollections = async (req, res) => {
         const allRanked = await getRankedListingsByCategory(catId);
         const topListings = allRanked.slice(0, 4);
 
-        // listing না থাকলে এই category বাদ
         if (topListings.length === 0) return null;
 
         return {
@@ -1074,9 +1075,7 @@ export const getCuratedCollections = async (req, res) => {
       })
     );
 
-    // null গুলো filter করে বাদ
     const filteredResults = results.filter(Boolean);
-
     res.status(200).json({ success: true, data: filteredResults });
   } catch (error) {
     console.error('Curated Collections Error:', error);
@@ -1088,6 +1087,9 @@ export const getCuratedCollections = async (req, res) => {
   }
 };
 
+// ============================================
+// getTrendingListings — FIXED (excludes ALL curated IDs from same categories)
+// ============================================
 export const getTrendingListings = async (req, res) => {
   try {
     const { limit = 8, page = 1 } = req.query;
@@ -1096,43 +1098,37 @@ export const getTrendingListings = async (req, res) => {
     const resPerPage = parseInt(limit);
     const skip = (parseInt(page) - 1) * resPerPage;
 
-    // ── Step 1: আজকের active category IDs ──
-    const SELECTED_CATEGORY_IDS = [
-      '69ec7f1eb5aac78d87858ad1',
-      '69ec7f6ab5aac78d87858adf',
-      '69ec7f56b5aac78d87858adb',
-      '69ec7fdab5aac78d87858af3',
-      '69ec7fe6b5aac78d87858af7',
-      '69ec7ff0b5aac78d87858afb',
-      '69ec7ffbb5aac78d87858aff',
-      '69ec7fbfb5aac78d87858ae7',
-    ];
-
+    // ── Step 1: Same daily categories as getCuratedCollections ──
     const dayOfMonth = new Date().getDate();
     const startIndex = dayOfMonth % 2 === 0 ? 0 : 4;
     const dailyCategoryIds = SELECTED_CATEGORY_IDS.slice(startIndex, startIndex + 4);
 
-    // ── Step 2: Curated top-4 IDs বের করা এবং ObjectId তে কনভার্ট করা ──
+    // ── Step 2: Get ALL curated IDs from today's categories ──
     const curatedIdArrays = await Promise.all(
       dailyCategoryIds.map(async (catId) => {
         const allRanked = await getRankedListingsByCategory(catId);
-        // নিশ্চিত করছি আইডিগুলো যেন Mongoose ObjectId ফরম্যাটে থাকে
-        return allRanked.slice(0, 4).map((l) => new mongoose.Types.ObjectId(l._id));
+        // Convert to ObjectId for $nin comparison
+        return allRanked.map((l) => {
+          // Handle both string and ObjectId _id formats
+          const id = l._id?.toString ? l._id.toString() : l._id;
+          return new mongoose.Types.ObjectId(id);
+        });
       })
     );
     const curatedListingIds = curatedIdArrays.flat();
 
-    // ── Step 3: Rank pipeline (curated বাদ দিয়ে) ──
+    // ── Step 3: Rank pipeline (exclude ALL curated listings) ──
+    const matchStage = {
+      status: 'approved',
+    };
+
+    // Only add $nin if we actually have curated IDs to exclude
+    if (curatedListingIds.length > 0) {
+      matchStage._id = { $nin: curatedListingIds };
+    }
+
     const rankPipeline = [
-      {
-        $match: {
-          status: 'approved',
-          // কিউরেটেড আইডিগুলো ট্রেন্ডিং থেকে বাদ দেওয়া হচ্ছে
-          ...(curatedListingIds.length > 0 && {
-            _id: { $nin: curatedListingIds },
-          }),
-        },
-      },
+      { $match: matchStage },
       {
         $addFields: {
           rankScore: {
@@ -1154,7 +1150,7 @@ export const getTrendingListings = async (req, res) => {
       { $sort: { rankScore: -1, createdAt: -1 } },
     ];
 
-    // Total count বের করা
+    // Total count
     const totalResult = await Listing.aggregate([...rankPipeline, { $count: 'total' }]);
     const total = totalResult[0]?.total || 0;
 
@@ -1163,8 +1159,6 @@ export const getTrendingListings = async (req, res) => {
       ...rankPipeline,
       { $skip: skip },
       { $limit: resPerPage },
-
-      // Creator lookup
       {
         $lookup: {
           from: 'users',
@@ -1174,8 +1168,6 @@ export const getTrendingListings = async (req, res) => {
         },
       },
       { $unwind: { path: '$creatorData', preserveNullAndEmptyArrays: true } },
-
-      // Category lookup
       {
         $lookup: {
           from: 'categories',
@@ -1185,8 +1177,6 @@ export const getTrendingListings = async (req, res) => {
         },
       },
       { $unwind: { path: '$categoryData', preserveNullAndEmptyArrays: true } },
-
-      // Cultural tags lookup
       {
         $lookup: {
           from: 'tags',
@@ -1195,8 +1185,6 @@ export const getTrendingListings = async (req, res) => {
           as: 'culturalTagsData',
         },
       },
-
-      // Project final fields
       {
         $project: {
           _id: 1,
