@@ -99,24 +99,32 @@ export const updateBlog = async (req, res) => {
     let updateData = { ...req.body };
 
     const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { slug: id };
-
     const blog = await Blog.findOne(query);
 
     if (!blog) {
       return res.status(404).json({ success: false, message: 'Blog not found' });
     }
 
+    // ১. মেইন ব্যানার ইমেজ আপডেট
     const mainBanner = req.files?.find((file) => file.fieldname === 'image');
     if (mainBanner) updateData.image = mainBanner.path;
 
+    // ২. কন্টেন্ট এবং গ্রিড ইমেজ প্রসেসিং
     if (req.body.content) {
-      let parsedContent = JSON.parse(req.body.content);
-      if (req.files) {
+      // কন্টেন্ট একবারই পার্স করুন
+      let parsedContent =
+        typeof req.body.content === 'string' ? JSON.parse(req.body.content) : req.body.content;
+
+      if (req.files && Array.isArray(parsedContent)) {
         parsedContent = parsedContent.map((block, index) => {
           const fieldName = `gridImages_${index}`;
           const newImages = req.files.filter((f) => f.fieldname === fieldName).map((f) => f.path);
+
           if (newImages.length > 0) {
-            return { ...block, images: [...(block.images || []), ...newImages] };
+            return {
+              ...block,
+              images: [...(block.images || []), ...newImages],
+            };
           }
           return block;
         });
@@ -124,10 +132,15 @@ export const updateBlog = async (req, res) => {
       updateData.content = parsedContent;
     }
 
-    const updatedBlog = await Blog.findByIdAndUpdate(blog._id, updateData, { new: true });
+    // ৩. ডাটাবেজ আপডেট (আপনার নতুন returnDocument অপশনসহ)
+    const updatedBlog = await Blog.findByIdAndUpdate(blog._id, updateData, {
+      returnDocument: 'after',
+    });
 
     res.status(200).json({ success: true, blog: updatedBlog });
   } catch (error) {
+    // এরর লগিং (আপনার ডিবাগিংয়ের জন্য সুবিধাজনক)
+    console.error('Update Error:', error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
