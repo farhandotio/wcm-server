@@ -13,5 +13,4 @@ const subscriptionEmailSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const SubscriptionEmails = mongoose.model('SubscriptionEmails', subscriptionEmailSchema);
-export default SubscriptionEmails;
+export const SubscriptionEmails = mongoose.model('SubscriptionEmails', subscriptionEmailSchema);
