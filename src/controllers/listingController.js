@@ -292,9 +292,9 @@ export const createListing = async (req, res) => {
       urlList = Array.isArray(externalUrls)
         ? externalUrls
         : externalUrls
-            .split(',')
-            .map((url) => url.trim())
-            .filter((url) => url !== '');
+          .split(',')
+          .map((url) => url.trim())
+          .filter((url) => url !== '');
     }
 
     let tagIds = [];
@@ -302,9 +302,9 @@ export const createListing = async (req, res) => {
       tagIds = Array.isArray(culturalTags)
         ? culturalTags
         : culturalTags
-            .split(',')
-            .map((t) => t.trim())
-            .filter((t) => t !== '');
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t !== '');
     }
 
     const newListing = await Listing.create({
@@ -366,9 +366,9 @@ export const updateListing = async (req, res) => {
       tags = Array.isArray(updateData.culturalTags)
         ? updateData.culturalTags
         : updateData.culturalTags
-            .split(',')
-            .map((t) => t.trim())
-            .filter((t) => t !== '');
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t !== '');
 
       if (tags.length > 5) {
         return res.status(400).json({ message: 'Maximum 5 cultural tags allowed' });
@@ -692,15 +692,38 @@ export const getPublicListings = async (req, res) => {
       if (mongoose.Types.ObjectId.isValid(category)) {
         query.category = category;
       } else {
-        const categoryTitle = category.replace(/-/g, ' ');
-        const foundCategory = await Category.findOne({
+        let categoryTitle = category.replace(/-/g, ' ').trim();
+
+        // Try 1: exact match
+        let foundCategory = await Category.findOne({
           title: { $regex: new RegExp(`^${categoryTitle}$`, 'i') },
-        })
-          .select('_id')
-          .lean();
+        }).select('_id').lean();
+
+        // Try 2: & → and
+        if (!foundCategory && categoryTitle.includes('&')) {
+          const withAnd = categoryTitle.replace(/&/g, 'and');
+          foundCategory = await Category.findOne({
+            title: { $regex: new RegExp(`^${withAnd}$`, 'i') },
+          }).select('_id').lean();
+        }
+
+        // Try 3: and → &
+        if (!foundCategory && categoryTitle.includes('and')) {
+          const withAmpersand = categoryTitle.replace(/\band\b/gi, '&');
+          foundCategory = await Category.findOne({
+            title: { $regex: new RegExp(`^${withAmpersand}$`, 'i') },
+          }).select('_id').lean();
+        }
+
+        // Try 4: partial match (fallback)
+        if (!foundCategory) {
+          foundCategory = await Category.findOne({
+            title: { $regex: new RegExp(categoryTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
+          }).select('_id').lean();
+        }
 
         if (foundCategory) query.category = foundCategory._id;
-        else query.category = new mongoose.Types.ObjectId();
+        else query.category = new mongoose.Types.ObjectId(); // empty result
       }
     }
 
@@ -874,49 +897,33 @@ const getRankedListingsByCategory = async (categoryId) => {
       $match: {
         category: new mongoose.Types.ObjectId(categoryId),
         status: 'approved',
-        'promotion.pinnedPosition': { $in: [1, 2, 3, 4] }, // শুধুমাত্র ১-৪ স্লটে পিন করাগুলো
+        'promotion.pinnedPosition': { $in: [1, 2, 3, 4] },
       },
     },
-    // ... আপনার বাকি সব Lookup এবং Project একই থাকবে ...
     ...getCommonPipelineParts(),
   ]);
 
-  // ২. পিন করা লিস্টিংগুলোর আইডি আলাদা করা যাতে তারা জেনারেল র‍্যাঙ্কিংয়ে না আসে
+  // ২. পিন করা লিস্টিংগুলোর আইডি আলাদা করা
   const pinnedIds = pinnedListings.map((l) => l._id);
 
-  // ৩. জেনারেল র‍্যাঙ্কড লিস্টিং নিয়ে আসা (পিন করাগুলো বাদ দিয়ে)
+  // ৩. জেনারেল র‍্যাঙ্কড লিস্টিং — ❌ rankScore বাদ, ✅ DB score দিয়ে sort
   const rankedListings = await Listing.aggregate([
     {
       $match: {
         category: new mongoose.Types.ObjectId(categoryId),
         status: 'approved',
-        _id: { $nin: pinnedIds }, // পিন করা লিস্টিং বাদ
+        _id: { $nin: pinnedIds },
       },
     },
-    {
-      $addFields: {
-        rankScore: {
-          $add: [
-            { $cond: [{ $eq: ['$promotion.ppc.isActive', true] }, 100, 0] },
-            { $multiply: [{ $ifNull: ['$views', 0] }, 0.5] },
-            { $multiply: [{ $ifNull: ['$promotion.ppc.totalClicks', 0] }, 2] },
-            {
-              $cond: [
-                { $gt: ['$createdAt', new Date(Date.now() - 15 * 24 * 60 * 60 * 1000)] },
-                10,
-                0,
-              ],
-            },
-          ],
-        },
-      },
-    },
-    { $sort: { rankScore: -1, createdAt: -1 } },
-    { $limit: 4 }, // সেফটির জন্য ৪টা নিলেই হবে
+    // ❌ পুরানো: { $addFields: { rankScore: {...} } },
+    // ❌ পুরানো: { $sort: { rankScore: -1, createdAt: -1 } },
+    // ✅ নতুন: DB-তে stored score দিয়ে sort
+    { $sort: { score: -1, createdAt: -1 } },
+    { $limit: 4 },
     ...getCommonPipelineParts(),
   ]);
 
-  // ৪. ফাইনাল ৪টি স্লট তৈরি করা [Slot 1, Slot 2, Slot 3, Slot 4]
+  // ৪. ফাইনাল ৪টি স্লট তৈরি
   const finalCurated = [null, null, null, null];
 
   // ৫. পিন করা লিস্টিংগুলোকে তাদের নির্দিষ্ট পজিশনে বসানো
@@ -927,7 +934,7 @@ const getRankedListingsByCategory = async (categoryId) => {
     }
   });
 
-  // ৬. বাকি খালি স্লটগুলো র‍্যাঙ্কড লিস্টিং দিয়ে সিরিয়ালি ফিলাপ করা
+  // ৬. বাকি খালি স্লটগুলো score অনুযায়ী ranked লিস্টিং দিয়ে fill
   let rankedIdx = 0;
   for (let i = 0; i < 4; i++) {
     if (finalCurated[i] === null && rankedListings[rankedIdx]) {
@@ -936,11 +943,9 @@ const getRankedListingsByCategory = async (categoryId) => {
     }
   }
 
-  // নাল ভ্যালু ফিল্টার করে (যদি ক্যাটাগরিতে লিস্টিং ৪টার কম থাকে) রিটার্ন করা
   return finalCurated.filter((item) => item !== null);
 };
 
-// কোড পরিষ্কার রাখার জন্য কমন পাইপলাইন পার্টস (Lookup & Project) এখানে রাখা হয়েছে
 function getCommonPipelineParts() {
   return [
     {
@@ -987,11 +992,28 @@ function getCommonPipelineParts() {
         slug: 1,
         image: 1,
         views: 1,
+        score: 1,
         rankScore: 1,
         createdAt: 1,
         favorites: 1,
         promotion: 1,
-        isPromoted: 1,
+        // ✅ isPromoted ক্যালকুলেট করে নাও
+        isPromoted: {
+          $or: [
+            {
+              $and: [
+                { $eq: ['$promotion.boost.isActive', true] },
+                { $ne: ['$promotion.boost.isPaused', true] }
+              ]
+            },
+            {
+              $and: [
+                { $eq: ['$promotion.ppc.isActive', true] },
+                { $ne: ['$promotion.ppc.isPaused', true] }
+              ]
+            }
+          ]
+        },
         status: 1,
         region: 1,
         country: 1,
@@ -1054,11 +1076,12 @@ export const getCuratedCollections = async (req, res) => {
 
         const generatedSlug = categoryInfo?.title
           ? categoryInfo.title
-              .toLowerCase()
-              .trim()
-              .replace(/[^\w\s-]/g, '')
-              .replace(/[\s_-]+/g, '-')
-              .replace(/^-+|-+$/g, '')
+            .toLowerCase()
+            .trim()
+            .replace(/&/g, ' and ')
+            .replace(/[^\w\s-]/g, '')
+            .replace(/[\s_-]+/g, '-')
+            .replace(/^-+|-+$/g, '')
           : 'unknown';
 
         const allRanked = await getRankedListingsByCategory(catId);
@@ -1098,18 +1121,14 @@ export const getTrendingListings = async (req, res) => {
     const resPerPage = parseInt(limit);
     const skip = (parseInt(page) - 1) * resPerPage;
 
-    // ── Step 1: Same daily categories as getCuratedCollections ──
     const dayOfMonth = new Date().getDate();
     const startIndex = dayOfMonth % 2 === 0 ? 0 : 4;
     const dailyCategoryIds = SELECTED_CATEGORY_IDS.slice(startIndex, startIndex + 4);
 
-    // ── Step 2: Get ALL curated IDs from today's categories ──
     const curatedIdArrays = await Promise.all(
       dailyCategoryIds.map(async (catId) => {
         const allRanked = await getRankedListingsByCategory(catId);
-        // Convert to ObjectId for $nin comparison
         return allRanked.map((l) => {
-          // Handle both string and ObjectId _id formats
           const id = l._id?.toString ? l._id.toString() : l._id;
           return new mongoose.Types.ObjectId(id);
         });
@@ -1117,46 +1136,21 @@ export const getTrendingListings = async (req, res) => {
     );
     const curatedListingIds = curatedIdArrays.flat();
 
-    // ── Step 3: Rank pipeline (exclude ALL curated listings) ──
-    const matchStage = {
-      status: 'approved',
-    };
-
-    // Only add $nin if we actually have curated IDs to exclude
+    const matchStage = { status: 'approved' };
     if (curatedListingIds.length > 0) {
       matchStage._id = { $nin: curatedListingIds };
     }
 
-    const rankPipeline = [
+    const sortPipeline = [
       { $match: matchStage },
-      {
-        $addFields: {
-          rankScore: {
-            $add: [
-              { $cond: [{ $eq: ['$promotion.ppc.isActive', true] }, 100, 0] },
-              { $multiply: [{ $ifNull: ['$views', 0] }, 0.5] },
-              { $multiply: [{ $ifNull: ['$promotion.ppc.totalClicks', 0] }, 2] },
-              {
-                $cond: [
-                  { $gt: ['$createdAt', new Date(Date.now() - 15 * 24 * 60 * 60 * 1000)] },
-                  10,
-                  0,
-                ],
-              },
-            ],
-          },
-        },
-      },
-      { $sort: { rankScore: -1, createdAt: -1 } },
+      { $sort: { score: -1, createdAt: -1 } },
     ];
 
-    // Total count
-    const totalResult = await Listing.aggregate([...rankPipeline, { $count: 'total' }]);
+    const totalResult = await Listing.aggregate([...sortPipeline, { $count: 'total' }]);
     const total = totalResult[0]?.total || 0;
 
-    // ── Step 4: Paginated + Populated ──
     const listings = await Listing.aggregate([
-      ...rankPipeline,
+      ...sortPipeline,
       { $skip: skip },
       { $limit: resPerPage },
       {
@@ -1165,6 +1159,15 @@ export const getTrendingListings = async (req, res) => {
           localField: 'creatorId',
           foreignField: '_id',
           as: 'creatorData',
+          pipeline: [
+            {
+              $project: {
+                username: 1,
+                listingsCount: 1,
+                profile: 1,  // ✅ পুরো profile নাও
+              }
+            }
+          ]
         },
       },
       { $unwind: { path: '$creatorData', preserveNullAndEmptyArrays: true } },
@@ -1192,7 +1195,7 @@ export const getTrendingListings = async (req, res) => {
           slug: 1,
           image: 1,
           views: 1,
-          rankScore: 1,
+          score: 1,
           createdAt: 1,
           favorites: 1,
           promotion: 1,
@@ -1222,14 +1225,15 @@ export const getTrendingListings = async (req, res) => {
                 ],
               },
               profileImage: { $ifNull: ['$creatorData.profile.profileImage', null] },
+              coverImage: { $ifNull: ['$creatorData.profile.coverImage', null] },
               bio: { $ifNull: ['$creatorData.profile.bio', ''] },
+              city: { $ifNull: ['$creatorData.profile.city', ''] },
             },
           },
         },
       },
     ]);
 
-    // ── Step 5: Creator stats aggregate (N+1 fix) ──
     const creatorIds = [
       ...new Set(listings.map((l) => l.creatorId?._id?.toString()).filter(Boolean)),
     ];
@@ -1250,7 +1254,6 @@ export const getTrendingListings = async (req, res) => {
       });
     }
 
-    // ── Step 6: Format ──
     const formattedListings = listings.map((item) => {
       const safeFavorites = Array.isArray(item.favorites) ? item.favorites : [];
       const creatorIdStr = item.creatorId?._id?.toString();

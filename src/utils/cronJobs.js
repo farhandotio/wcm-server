@@ -40,7 +40,7 @@ export const initCronJobs = () => {
 
   // ── Job 2: Listing Score Updater ──────────────────────────
   // প্রতি ঘণ্টার শুরুতে চলবে (0 * * * *)
-  cron.schedule('0 * * * *', async () => {
+  cron.schedule('*/10 * * * *', async () => {
     console.log('[Cron] Running listing score updater...');
     await calculateAndUpdateScores();
   });
