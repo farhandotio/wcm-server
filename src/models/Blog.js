@@ -33,6 +33,13 @@ const blogSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+
+    status: {
+      type: String,
+      enum: ['draft', 'published'],
+      default: 'draft', // by default draft
+      index: true,
+    },
   },
   { timestamps: true }
 );

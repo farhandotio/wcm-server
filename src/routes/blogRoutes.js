@@ -1,7 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import upload from '../config/multer.js'; // আপনার দেওয়া multer config
-import { authMiddleware, authorizeRoles } from '../middlewares/auth.js'; // আপনার মিডলওয়্যার
+import { authMiddleware, authorizeRoles, optionalAuth } from '../middlewares/auth.js';
 import {
   createBlog,
   getBlogs,
@@ -16,7 +16,7 @@ import {
 } from '../controllers/commentController.js';
 
 // --- BLOG ROUTES ---
-router.get('/', getBlogs);
+router.get('/', optionalAuth, getBlogs); 
 router.get('/:id', getBlogById);
 router.post('/', authMiddleware, authorizeRoles('admin'), upload.any(), createBlog);
 router.put('/:id', authMiddleware, authorizeRoles('admin'), upload.any(), updateBlog);
