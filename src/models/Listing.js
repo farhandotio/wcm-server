@@ -32,7 +32,7 @@ const listingSchema = new mongoose.Schema(
 
     tradition: { type: String, required: true },
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
-    culturalTags: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Tag' }],
+    culturalTags: [{ type: String, trim: true }],
     status: {
       type: String,
       enum: ['pending', 'approved', 'rejected', 'blocked'],
