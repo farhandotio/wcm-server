@@ -3,20 +3,63 @@ import Comment from '../models/Comment.js';
 import mongoose from 'mongoose';
 import slugify from 'slugify';
 
+const parseTags = (tags) => {
+  if (Array.isArray(tags)) {
+    return tags.map((tag) => String(tag).trim()).filter(Boolean);
+  }
+
+  if (typeof tags === 'string') {
+    return tags
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
+const parseContent = (content) => {
+  if (!content) return [];
+  return typeof content === 'string' ? JSON.parse(content) : content;
+};
+
+const createUniqueSlug = async (title, currentBlogId = null) => {
+  const baseSlug = slugify(title || 'blog', { lower: true, strict: true }) || 'blog';
+  let slug = baseSlug;
+  let counter = 1;
+
+  const slugExists = async (candidate) => {
+    const query = { slug: candidate };
+    if (currentBlogId) query._id = { $ne: currentBlogId };
+    return Blog.exists(query);
+  };
+
+  while (await slugExists(slug)) {
+    counter += 1;
+    slug = `${baseSlug}-${counter}`;
+  }
+
+  return slug;
+};
+
 // --- ADMIN ONLY: Create Blog ---
 export const createBlog = async (req, res) => {
   try {
     const { category, title, tags, description, content } = req.body;
 
-    const slug = slugify(title, { lower: true, strict: true });
+    if (!title?.trim()) return res.status(400).json({ message: 'Title is required' });
+    if (!category?.trim()) return res.status(400).json({ message: 'Category is required' });
+    if (!description?.trim()) return res.status(400).json({ message: 'Description is required' });
+
+    const slug = await createUniqueSlug(title);
 
     // ১. মেইন ব্যানার চেক (req.files এ 'image' ফিল্ড চেক করা হচ্ছে)
-    const mainBanner = req.files.find((file) => file.fieldname === 'image');
+    const mainBanner = req.files?.find((file) => file.fieldname === 'image');
     if (!mainBanner) return res.status(400).json({ message: 'Main banner image is required' });
 
     // ২. ডাটা পার্স করা
-    const parsedTags = typeof tags === 'string' ? tags.split(',').map((t) => t.trim()) : tags;
-    let parsedContent = typeof content === 'string' ? JSON.parse(content) : content;
+    const parsedTags = parseTags(tags);
+    let parsedContent = parseContent(content);
 
     // ৩. ডাইনামিক গ্রিড ইমেজ প্রসেসিং
     // ফ্রন্টেন্ড থেকে gridImages_0, gridImages_1 এভাবে ডাটা আসছে
@@ -65,13 +108,40 @@ export const createBlog = async (req, res) => {
 export const updateBlog = async (req, res) => {
   try {
     const { id } = req.params;
-    let updateData = { ...req.body };
 
     const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { slug: id };
     const blog = await Blog.findOne(query);
 
     if (!blog) {
       return res.status(404).json({ success: false, message: 'Blog not found' });
+    }
+
+    const updateData = {};
+
+    if (req.body.title !== undefined) {
+      if (!req.body.title?.trim()) return res.status(400).json({ message: 'Title is required' });
+      updateData.title = req.body.title;
+      updateData.slug = await createUniqueSlug(req.body.title, blog._id);
+    }
+
+    if (req.body.category !== undefined) {
+      if (!req.body.category?.trim()) return res.status(400).json({ message: 'Category is required' });
+      updateData.category = req.body.category;
+    }
+
+    if (req.body.description !== undefined) {
+      if (!req.body.description?.trim()) {
+        return res.status(400).json({ message: 'Description is required' });
+      }
+      updateData.description = req.body.description;
+    }
+
+    if (req.body.tags !== undefined) {
+      updateData.tags = parseTags(req.body.tags);
+    }
+
+    if (req.body.status !== undefined) {
+      updateData.status = req.body.status;
     }
 
     // ১. মেইন ব্যানার ইমেজ আপডেট
@@ -81,8 +151,7 @@ export const updateBlog = async (req, res) => {
     // ২. কন্টেন্ট এবং গ্রিড ইমেজ প্রসেসিং
     if (req.body.content) {
       // কন্টেন্ট একবারই পার্স করুন
-      let parsedContent =
-        typeof req.body.content === 'string' ? JSON.parse(req.body.content) : req.body.content;
+      let parsedContent = parseContent(req.body.content);
 
       if (req.files && Array.isArray(parsedContent)) {
         parsedContent = parsedContent.map((block, index) => {
@@ -104,6 +173,7 @@ export const updateBlog = async (req, res) => {
     // ৩. ডাটাবেজ আপডেট (আপনার নতুন returnDocument অপশনসহ)
     const updatedBlog = await Blog.findByIdAndUpdate(blog._id, updateData, {
       returnDocument: 'after',
+      runValidators: true,
     });
 
     res.status(200).json({ success: true, blog: updatedBlog });

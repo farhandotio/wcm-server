@@ -90,6 +90,15 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/monitoring', logRoutes);
 
 app.use((err, req, res, next) => {
+  const isUploadSizeError =
+    err.code === 'LIMIT_FILE_SIZE' ||
+    err.message?.includes('File size too large') ||
+    err.message?.includes('File too large');
+  const statusCode = isUploadSizeError ? 413 : err.status || 500;
+  const message = isUploadSizeError
+    ? 'Image is too large. Please upload an image under 10MB.'
+    : err.message || 'Internal Server Error';
+
   logger.error({
     message: err.message,
     stack: err.stack,
@@ -97,9 +106,9 @@ app.use((err, req, res, next) => {
     method: req.method,
   });
 
-  res.status(err.status || 500).json({
+  res.status(statusCode).json({
     success: false,
-    message: err.message || 'Internal Server Error',
+    message,
   });
 });
 
