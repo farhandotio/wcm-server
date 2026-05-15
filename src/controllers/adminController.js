@@ -171,35 +171,237 @@ export const createTag = async (req, res) => {
   }
 };
 
-// Get How It Works Content
+
+// ===== GET PAGE CONTENT (Public) =====
 export const getPageContent = async (req, res) => {
   try {
-    // ডাটাবেজে খোঁজ করা হচ্ছে
     let content = await HowItWork.findOne({ pageName: 'how-it-works' });
 
-    // যদি ডাটা না থাকে, তবে মডেলে দেওয়া default value দিয়ে একটি নতুন ডাটা তৈরি হবে
     if (!content) {
       content = await HowItWork.create({ pageName: 'how-it-works' });
     }
 
-    res.status(200).json(content);
+    res.status(200).json({
+      success: true,
+      data: content
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Get Page Content Error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
-// Update How It Works Content
+// ===== UPDATE FULL PAGE CONTENT (Admin) =====
 export const updatePageContent = async (req, res) => {
-  const { headerTitle, headerDescription, steps } = req.body;
   try {
+    const { headerTitle, headerDescription, steps } = req.body;
+
+    if (!headerTitle?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Header title is required'
+      });
+    }
+
+    if (!headerDescription?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Header description is required'
+      });
+    }
+
+    if (!steps || !Array.isArray(steps) || steps.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one step is required'
+      });
+    }
+
+    for (const step of steps) {
+      if (!step.title?.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: `Step ${step.id} title is required`
+        });
+      }
+      if (!step.description?.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: `Step ${step.id} description is required`
+        });
+      }
+    }
+
     const updatedContent = await HowItWork.findOneAndUpdate(
       { pageName: 'how-it-works' },
-      { headerTitle, headerDescription, steps },
-      { new: true, upsert: true }
+      {
+        $set: {
+          headerTitle: headerTitle.trim(),
+          headerDescription: headerDescription.trim(),
+          steps: steps.map((step, index) => ({
+            id: step.id || index + 1,
+            title: step.title.trim(),
+            description: step.description.trim()
+          }))
+        }
+      },
+      {
+        new: true,
+        upsert: true,
+        runValidators: true
+      }
     );
-    res.status(200).json(updatedContent);
+
+    res.status(200).json({
+      success: true,
+      message: 'Content saved successfully',
+      data: updatedContent
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Update Page Content Error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ===== ADD NEW STEP =====
+export const addStep = async (req, res) => {
+  try {
+    const { title, description } = req.body;
+
+    if (!title?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Step title is required'
+      });
+    }
+
+    const content = await HowItWork.findOne({ pageName: 'how-it-works' });
+
+    if (!content) {
+      return res.status(404).json({
+        success: false,
+        message: 'Content not found'
+      });
+    }
+
+    const newId = content.steps.length > 0
+      ? Math.max(...content.steps.map(s => s.id)) + 1
+      : 1;
+
+    content.steps.push({
+      id: newId,
+      title: title.trim(),
+      description: description?.trim() || ''
+    });
+
+    await content.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Step added successfully',
+      data: content
+    });
+
+  } catch (error) {
+    console.error('Add Step Error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ===== UPDATE SINGLE STEP =====
+export const updateSingleStep = async (req, res) => {
+  try {
+    const { stepId } = req.params;
+    const { title, description } = req.body;
+
+    const content = await HowItWork.findOne({ pageName: 'how-it-works' });
+
+    if (!content) {
+      return res.status(404).json({
+        success: false,
+        message: 'Content not found'
+      });
+    }
+
+    const stepIndex = content.steps.findIndex(s => s.id === parseInt(stepId));
+
+    if (stepIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'Step not found'
+      });
+    }
+
+    if (title !== undefined) {
+      content.steps[stepIndex].title = title.trim();
+    }
+    if (description !== undefined) {
+      content.steps[stepIndex].description = description.trim();
+    }
+
+    await content.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Step updated successfully',
+      data: content
+    });
+
+  } catch (error) {
+    console.error('Update Single Step Error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ===== DELETE STEP =====
+export const deleteStep = async (req, res) => {
+  try {
+    const { stepId } = req.params;
+
+    const content = await HowItWork.findOne({ pageName: 'how-it-works' });
+
+    if (!content) {
+      return res.status(404).json({
+        success: false,
+        message: 'Content not found'
+      });
+    }
+
+    content.steps = content.steps.filter(s => s.id !== parseInt(stepId));
+
+    // Re-assign IDs
+    content.steps = content.steps.map((step, index) => ({
+      ...step,
+      id: index + 1
+    }));
+
+    await content.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Step deleted successfully',
+      data: content
+    });
+
+  } catch (error) {
+    console.error('Delete Step Error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 

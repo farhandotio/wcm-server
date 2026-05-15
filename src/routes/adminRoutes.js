@@ -7,8 +7,8 @@ import {
   toggleUserStatus,
   manageListings,
   updateListingStatus,
-  pinListing, // পিন কন্ট্রোলার ইম্পোর্ট নিশ্চিত করা হয়েছে
-  unpinListing, // আনপিন কন্ট্রোলার ইম্পোর্ট নিশ্চিত করা হয়েছে
+  pinListing,
+  unpinListing,
   createTag,
   createCategory,
   updateCategory,
@@ -26,67 +26,64 @@ import {
   getAllCategories,
   getUserById,
   exportTransactionsByRange,
-  // --- Regions Controllers ---
   getAllRegions,
   getRegionsByCategory,
   createRegion,
   updateRegion,
   deleteRegion,
-  // --- Traditions Controllers ---
   getAllTraditions,
   getTraditionsByCategory,
   createTradition,
   updateTradition,
   deleteTradition,
+  // ===== HOW IT WORKS =====
   getPageContent,
   updatePageContent,
-  // --- Combined Asset ---
+  addStep,
+  updateSingleStep,
+  deleteStep,
   getCategoryAssets,
 } from '../controllers/adminController.js';
 
-// আপনার বিদ্যমান মিডলওয়্যার ইম্পোর্ট
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 import upload from '../config/multer.js';
 
 const router = express.Router();
 
-// --- ১. পাবলিক / ফেচ রাউটস (Auth এর বাইরে) ---
+// ===== PUBLIC ROUTES =====
 router.get('/categories', getAllCategories);
 router.get('/tags/by-category/:categoryId', getTagsByCategory);
 router.get('/regions/by-category/:categoryId', getRegionsByCategory);
 router.get('/traditions/by-category/:categoryId', getTraditionsByCategory);
 router.get('/category-assets/:categoryId', getCategoryAssets);
-// ১. পাবলিক রাউট (মেটাডেটা বা পেজ লোডের জন্য)
+
+// How It Works - Public
 router.get('/how-it-works', getPageContent);
 
-// --- ২. অ্যাডমিন অথোরাইজেশন মিডলওয়্যার ---
-// নিচের সব রাউটের জন্য এই মিডলওয়্যারগুলো অটোমেটিক অ্যাপ্লাই হবে
+// ===== ADMIN PROTECTED ROUTES =====
 router.use(authMiddleware);
 router.use(authorizeRoles('admin'));
 
-// পাবলিকলি ডাটা দেখার জন্য
+// How It Works - Admin
 router.put('/how-it-works', updatePageContent);
+router.post('/how-it-works/steps', addStep);
+router.put('/how-it-works/steps/:stepId', updateSingleStep);
+router.delete('/how-it-works/steps/:stepId', deleteStep);
 
-// অ্যাডমিন প্যানেল থেকে আপডেট করার জন্য
-// এখানে আপনার মিডলওয়্যার (যেমন: verifyAdmin) যোগ করা উচিত
-router.put('/how-it-works', updatePageContent);
-
-// --- ৩. স্ট্যাটস ও ট্রানজেকশন ---
+// Stats & Transactions
 router.get('/stats', getAdminStats);
 router.get('/transactions', getAllTransactions);
 router.get('/export-transactions', exportTransactionsExcel);
 router.get('/export-transactions-range', exportTransactionsByRange);
 
-// --- ৪. লিস্টিং ম্যানেজমেন্ট (পিনিং সিস্টেমসহ) ---
+// Listings
 router.get('/listings', manageListings);
 router.get('/promoted-listings', getPromotedListings);
 router.put('/update-status/:id', updateListingStatus);
-
-// অ্যাডমিন পিন ও আনপিন রাউট (এখানে আলাদাভাবে মিডলওয়্যার দেয়ার দরকার নেই কারণ উপরে 'router.use' করা হয়েছে)
 router.patch('/listings/:id/pin', pinListing);
 router.patch('/listings/:id/unpin', unpinListing);
 
-// --- ৫. ইউজার ম্যানেজমেন্ট ---
+// Users
 router.get('/users', getAllUsers);
 router.get('/users/:id', getUserById);
 router.get('/export-users', exportUsersExcel);
@@ -96,24 +93,24 @@ router.put('/reject-creator/:userId', rejectCreator);
 router.put('/toggle-status/:userId', toggleUserStatus);
 router.put('/update-ppc-balance/:id', updatePpcBalanceManual);
 
-// --- ৬. ক্যাটাগরি CRUD ---
+// Categories
 router.post('/categories', createCategory);
 router.put('/categories/reorder', updateCategoryOrder);
 router.put('/categories/:id', updateCategory);
 router.delete('/categories/:id', deleteCategory);
 
-// --- ৭. ট্যাগ CRUD ---
+// Tags
 router.post('/tags', createTag);
 router.put('/tags/:id', updateTag);
 router.delete('/tags/:id', deleteTag);
 
-// --- ৮. রিজিয়ন CRUD ---
+// Regions
 router.get('/regions', getAllRegions);
 router.post('/regions', createRegion);
 router.put('/regions/:id', updateRegion);
 router.delete('/regions/:id', deleteRegion);
 
-// --- ৯. ট্র্যাডিশন CRUD ---
+// Traditions
 router.get('/traditions', getAllTraditions);
 router.post('/traditions', createTradition);
 router.put('/traditions/:id', updateTradition);
