@@ -1,5 +1,5 @@
 import express from 'express';
-import upload from '../config/multer.js'; // আপনার তৈরি করা মাল্টার কনফিগ
+import upload from '../config/multer.js';
 import {
     getAboutPage,
     resetAboutPage,
@@ -38,7 +38,6 @@ router.delete('/reset', resetAboutPage);
 router.patch('/header', updateAboutHeader);
 
 // Intro Section (Multiple images upload support)
-// এখানে 'gridImages' ফিল্ড নেম এবং সর্বোচ্চ ৪টি ছবি সাপোর্ট করবে
 router.patch('/intro', upload.array('gridImages', 4), updateIntroSection);
 router.patch('/intro/image/:index', upload.single('gridImage'), updateIntroSingleImage);
 
