@@ -161,6 +161,8 @@ const AboutPageSchema = new mongoose.Schema({
     },
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ৬. VISION SECTION
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     visionSection: {
         header: {
             badge: {
@@ -245,6 +247,7 @@ const AboutPageSchema = new mongoose.Schema({
             ]
         }
     },
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // ৭. VISIBILITY SECTION
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
