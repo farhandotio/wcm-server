@@ -272,8 +272,7 @@ const AboutPageSchema = new mongoose.Schema({
                     "50 AVENUE DES CHAMPS ÉLYSÉES, PARIS",
                     "WASHINGTON, USA"
                 ]
-            },
-            serviceText: { type: String, default: "SERVING GLOBAL ARTISANS" }
+            }
         }
     }
 
