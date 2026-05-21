@@ -43,6 +43,10 @@ import {
   updateSingleStep,
   deleteStep,
   getCategoryAssets,
+  getBackupList,
+  handleManualBackup,
+  handleManualRestore,
+  deleteBackupFile,
 } from '../controllers/adminController.js';
 
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
@@ -115,5 +119,12 @@ router.get('/traditions', getAllTraditions);
 router.post('/traditions', createTradition);
 router.put('/traditions/:id', updateTradition);
 router.delete('/traditions/:id', deleteTradition);
+
+// DB backups
+// Database Management APIs
+router.get('/database/backups', getBackupList);
+router.post('/database/backup', handleManualBackup);
+router.post('/database/restore', handleManualRestore);
+router.delete('/database/backups/:fileName', deleteBackupFile);
 
 export default router;

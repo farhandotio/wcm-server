@@ -2,10 +2,11 @@ import cron from 'node-cron';
 import Listing from '../models/Listing.js';
 import AuditLog from '../models/AuditLog.js';
 import { calculateAndUpdateScores } from './listingScoreCalculator.js';
+import { backupDB } from './dbBackup.js';
 
 export const initCronJobs = () => {
   // ── Job 1: Boost Daily Income Logger ─────────────────────
-  // প্রতিদিন রাত ১২:০১ মিনিটে চলবে
+  // every night at 12:01
   cron.schedule('1 0 * * *', async () => {
     try {
       const now = new Date();
@@ -38,19 +39,29 @@ export const initCronJobs = () => {
     }
   });
 
+  // Every Night at 00:00 AM (Midnight)
+  cron.schedule('0 0 * * *', async () => {
+    try {
+      console.log('[Cron] Starting Nightly Automated Backup Sequence...');
+      const result = await backupDB();
+      console.log(`[Cron] Successfully backed up to ${result.fileName}`);
+    } catch (error) {
+      console.error('[Cron] Automated Backup Failed:', error);
+    }
+  });
+
   // ── Job 2: Listing Score Updater ──────────────────────────
-  // প্রতি ঘণ্টার শুরুতে চলবে (0 * * * *)
+  // every hour (0 * * * *)
   cron.schedule('*/10 * * * *', async () => {
     console.log('[Cron] Running listing score updater...');
     await calculateAndUpdateScores();
   });
 
-  // ── Startup: server চালু হওয়ার সাথে সাথে একবার রান ───────
-  // যাতে deploy-এর পর ঘণ্টা পর্যন্ত অপেক্ষা না করতে হয়
+  // ── Startup: server
   (async () => {
-    console.log('[Cron] Running initial score calculation on startup...');
+    console.log('[Cron] Running initials cron jobs...');
     await calculateAndUpdateScores();
   })();
 
   console.log('[Cron] All cron jobs initialized.');
-};
+};;

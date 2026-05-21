@@ -16,8 +16,12 @@ import HowItWork from '../models/howItWork.js';
 import {
   invalidateListingCaches,
   invalidateMetaCaches,
-  invalidateUserProfileCaches
+  invalidateUserProfileCaches,
 } from '../utils/cache.js';
+import { fileURLToPath } from 'url';
+import { backupDB } from '../utils/dbBackup.js';
+import { restoreDB } from '../utils/dbRestore.js';
+
 
 // Get Regions by Category
 export const getRegionsByCategory = async (req, res) => {
@@ -82,7 +86,7 @@ export const getTraditionsByCategory = async (req, res) => {
     res.status(200).json(traditions);
   } catch (error) {
     // এখানে সার্ভার কনসোলে এরর প্রিন্ট হবে, ওটা চেক করুন
-    console.error("Error in getTraditionsByCategory:", error);
+    console.error('Error in getTraditionsByCategory:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -133,14 +137,14 @@ export const getCategoryAssets = async (req, res) => {
     const [tags, regions, traditions] = await Promise.all([
       Tag.find({ category: categoryId }),
       Region.find({ category: categoryId }),
-      Tradition.find({ category: categoryId })
+      Tradition.find({ category: categoryId }),
     ]);
 
     res.status(200).json({
       success: true,
       tags,
       regions,
-      traditions
+      traditions,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -171,7 +175,6 @@ export const createTag = async (req, res) => {
   }
 };
 
-
 // ===== GET PAGE CONTENT (Public) =====
 export const getPageContent = async (req, res) => {
   try {
@@ -183,13 +186,13 @@ export const getPageContent = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: content
+      data: content,
     });
   } catch (error) {
     console.error('Get Page Content Error:', error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
@@ -202,21 +205,21 @@ export const updatePageContent = async (req, res) => {
     if (!headerTitle?.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Header title is required'
+        message: 'Header title is required',
       });
     }
 
     if (!headerDescription?.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Header description is required'
+        message: 'Header description is required',
       });
     }
 
     if (!steps || !Array.isArray(steps) || steps.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'At least one step is required'
+        message: 'At least one step is required',
       });
     }
 
@@ -224,13 +227,13 @@ export const updatePageContent = async (req, res) => {
       if (!step.title?.trim()) {
         return res.status(400).json({
           success: false,
-          message: `Step ${step.id} title is required`
+          message: `Step ${step.id} title is required`,
         });
       }
       if (!step.description?.trim()) {
         return res.status(400).json({
           success: false,
-          message: `Step ${step.id} description is required`
+          message: `Step ${step.id} description is required`,
         });
       }
     }
@@ -244,28 +247,27 @@ export const updatePageContent = async (req, res) => {
           steps: steps.map((step, index) => ({
             id: step.id || index + 1,
             title: step.title.trim(),
-            description: step.description.trim()
-          }))
-        }
+            description: step.description.trim(),
+          })),
+        },
       },
       {
         new: true,
         upsert: true,
-        runValidators: true
+        runValidators: true,
       }
     );
 
     res.status(200).json({
       success: true,
       message: 'Content saved successfully',
-      data: updatedContent
+      data: updatedContent,
     });
-
   } catch (error) {
     console.error('Update Page Content Error:', error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
@@ -278,7 +280,7 @@ export const addStep = async (req, res) => {
     if (!title?.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Step title is required'
+        message: 'Step title is required',
       });
     }
 
@@ -287,18 +289,16 @@ export const addStep = async (req, res) => {
     if (!content) {
       return res.status(404).json({
         success: false,
-        message: 'Content not found'
+        message: 'Content not found',
       });
     }
 
-    const newId = content.steps.length > 0
-      ? Math.max(...content.steps.map(s => s.id)) + 1
-      : 1;
+    const newId = content.steps.length > 0 ? Math.max(...content.steps.map((s) => s.id)) + 1 : 1;
 
     content.steps.push({
       id: newId,
       title: title.trim(),
-      description: description?.trim() || ''
+      description: description?.trim() || '',
     });
 
     await content.save();
@@ -306,14 +306,13 @@ export const addStep = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Step added successfully',
-      data: content
+      data: content,
     });
-
   } catch (error) {
     console.error('Add Step Error:', error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
@@ -329,16 +328,16 @@ export const updateSingleStep = async (req, res) => {
     if (!content) {
       return res.status(404).json({
         success: false,
-        message: 'Content not found'
+        message: 'Content not found',
       });
     }
 
-    const stepIndex = content.steps.findIndex(s => s.id === parseInt(stepId));
+    const stepIndex = content.steps.findIndex((s) => s.id === parseInt(stepId));
 
     if (stepIndex === -1) {
       return res.status(404).json({
         success: false,
-        message: 'Step not found'
+        message: 'Step not found',
       });
     }
 
@@ -354,14 +353,13 @@ export const updateSingleStep = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Step updated successfully',
-      data: content
+      data: content,
     });
-
   } catch (error) {
     console.error('Update Single Step Error:', error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
@@ -376,16 +374,16 @@ export const deleteStep = async (req, res) => {
     if (!content) {
       return res.status(404).json({
         success: false,
-        message: 'Content not found'
+        message: 'Content not found',
       });
     }
 
-    content.steps = content.steps.filter(s => s.id !== parseInt(stepId));
+    content.steps = content.steps.filter((s) => s.id !== parseInt(stepId));
 
     // Re-assign IDs
     content.steps = content.steps.map((step, index) => ({
       ...step,
-      id: index + 1
+      id: index + 1,
     }));
 
     await content.save();
@@ -393,14 +391,13 @@ export const deleteStep = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Step deleted successfully',
-      data: content
+      data: content,
     });
-
   } catch (error) {
     console.error('Delete Step Error:', error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message,
     });
   }
 };
@@ -414,19 +411,21 @@ export const pinListing = async (req, res) => {
     await Listing.updateOne(
       {
         category: categoryId,
-        "promotion.pinnedPosition": position
+        'promotion.pinnedPosition': position,
       },
-      { $set: { "promotion.pinnedPosition": null } }
+      { $set: { 'promotion.pinnedPosition': null } }
     );
 
     // ২. নতুন লিস্টিংটিকে ওই পজিশনে পিন করুন
     const updatedListing = await Listing.findByIdAndUpdate(
       id,
-      { $set: { "promotion.pinnedPosition": position } },
+      { $set: { 'promotion.pinnedPosition': position } },
       { new: true }
     );
 
-    res.status(200).json({ message: `Listing pinned to position ${position}`, data: updatedListing });
+    res
+      .status(200)
+      .json({ message: `Listing pinned to position ${position}`, data: updatedListing });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -435,8 +434,8 @@ export const pinListing = async (req, res) => {
 export const unpinListing = async (req, res) => {
   try {
     const { id } = req.params;
-    await Listing.findByIdAndUpdate(id, { $set: { "promotion.pinnedPosition": null } });
-    res.status(200).json({ message: "Listing unpinned successfully" });
+    await Listing.findByIdAndUpdate(id, { $set: { 'promotion.pinnedPosition': null } });
+    res.status(200).json({ message: 'Listing unpinned successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -838,7 +837,7 @@ export const manageListings = async (req, res) => {
         ...item,
         creatorName: item.creatorId
           ? `${item.creatorId.firstName || ''} ${item.creatorId.lastName || ''}`.trim() ||
-          item.creatorId.username
+            item.creatorId.username
           : 'Unknown Creator',
         categoryName: item.category?.title || 'Uncategorized',
         ppcStatus: ppcBalance.toFixed(2),
@@ -1738,5 +1737,74 @@ export const getUserById = async (req, res) => {
       success: false,
       message: 'CORE_RETRIEVAL_FAILURE: ' + error.message,
     });
+  }
+};
+
+
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PUBLIC_DIR = path.join(__dirname, '..', '..', 'public', 'backups');
+
+export const getBackupList = async (req, res) => {
+  try {
+    if (!fs.existsSync(PUBLIC_DIR)) {
+      return res.status(200).json([]);
+    }
+
+    const files = fs.readdirSync(PUBLIC_DIR);
+
+    const backupList = files
+      .filter((file) => file.endsWith('.gzip'))
+      .map((file) => {
+        const stats = fs.statSync(path.join(PUBLIC_DIR, file));
+        return {
+          fileName: file,
+          size: `${(stats.size / (1024 * 1024)).toFixed(2)} MB`,
+          createdAt: stats.birthtime,
+        };
+      })
+      .sort((a, b) => b.createdAt - a.createdAt); // নতুন ফাইল উপরে থাকবে
+
+    return res.status(200).json(backupList);
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const handleManualBackup = async (req, res) => {
+  try {
+    const result = await backupDB();
+    return res.status(200).json({ success: true, message: `Backup created: ${result.fileName}` });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const handleManualRestore = async (req, res) => {
+  try {
+    const { fileName } = req.body;
+    if (!fileName) return res.status(400).json({ success: false, message: 'File name required' });
+
+    await restoreDB(fileName);
+    return res.status(200).json({ success: true, message: 'Database clean-merged successfully!' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const deleteBackupFile = async (req, res) => {
+  try {
+    const { fileName } = req.params;
+    const filePath = path.join(PUBLIC_DIR, fileName);
+
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return res.status(200).json({ success: true, message: 'Backup file deleted permanently.' });
+    } else {
+      return res.status(404).json({ success: false, message: 'File not found' });
+    }
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
