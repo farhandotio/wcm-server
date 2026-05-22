@@ -20,6 +20,7 @@ import footerRoutes from './routes/footerRoutes.js';
 import logRoutes from './routes/logRoutes.js';
 import { logger } from './utils/logger.js';
 import emailRoutes from './routes/subscriptionEmails.js';
+import verificationRoutes from './routes/verificationRoutes.js';
 
 // --- New About Route (Based on our Discussion) ---
 import aboutRoutes from './routes/aboutRoutes.js';
@@ -76,6 +77,7 @@ app.use('/api/faqs', faqRoutes);
 app.use('/api/seo', seoRoutes);
 app.use('/api/footer', footerRoutes);
 app.use('/api/emails', emailRoutes);
+app.use('/api/verifications', verificationRoutes);
 
 /**
  * @section About Page Route
