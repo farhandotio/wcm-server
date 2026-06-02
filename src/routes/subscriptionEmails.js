@@ -1,7 +1,12 @@
 // routes/subscriptionEmails.js
 import express from 'express';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
-import { allEmail, create, deleteEmail, deleteAllEmails } from '../controllers/subscriptionEmailsController.js';
+import {
+  allEmail,
+  create,
+  deleteEmail,
+  deleteAllEmails,
+} from '../controllers/subscriptionEmailsController.js';
 const router = express.Router();
 
 router.post('/', create);
