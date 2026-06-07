@@ -560,8 +560,6 @@ export const getFamousCreators = async (req, res) => {
           },
         },
       },
-
-      { $match: { totalListings: { $gt: 0 } } },
     ];
 
     // 🔥 Sorting
