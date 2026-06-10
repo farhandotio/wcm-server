@@ -1051,14 +1051,14 @@ function getCommonPipelineParts() {
 // SHARED CONSTANT (top of file or separate module)
 // ============================================
 const SELECTED_CATEGORY_IDS = [
-  '69ec7f6ab5aac78d87858adf', // TRADITIONAL CLOTHING
-  '69ec7f56b5aac78d87858adb', // CULTURAL TEXTILES
-  '69ec7fdab5aac78d87858af3',
-  '69ec7fe6b5aac78d87858af7',
-  '69ec7ff0b5aac78d87858afb',
-  '69ec7f1eb5aac78d87858ad1', // HANDMADE CRAFTS
-  '69ec7ffbb5aac78d87858aff',
-  '69ec7fbfb5aac78d87858ae7',
+  '6a1f0b931cdebacae075f42a', // TRADITIONAL CLOTHING
+  '6a1f0b7e1cdebacae075f422', // CULTURAL TEXTILES
+  '6a1f240c1cdebacae075fabd',
+  '6a1f1d911cdebacae075fa0d',
+  '6a1f0bd01cdebacae075f468',
+  '6a1f0b691cdebacae075f3fd', // HANDMADE CRAFTS
+  '6a1f0ba81cdebacae075f435',
+  '6a1f99a31cdebacae075fe83',
 ];
 
 // ============================================
