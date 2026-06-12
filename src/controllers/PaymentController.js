@@ -46,9 +46,13 @@ export const createCheckoutSession = async (req, res) => {
     // ১. ইউজার ডাটা চেক
     const user = await User.findById(req.user._id);
     if (!user || !user.profile) {
-      return res
-        .status(400)
-        .json({ message: 'Profile information missing. Please complete your profile.' });
+      return res.status(400).json({ message: 'Profile information missing. Please complete your profile.' });
+    }
+
+    if (!user.profile?.countryCode) {
+      return res.status(400).json({
+        message: 'Please add your country in profile before making a payment.'
+      });
     }
 
     if (!amount || amount < 5)
@@ -133,12 +137,13 @@ export const handleStripeWebhook = async (req, res) => {
       const vatPaid = Number(vatAmount);
 
       let walletCreditInEUR = 0;
+      let fxrate = 1;
 
       // ১. কারেন্সি কনভার্সন (যদি EUR না হয়)
       if (originalCurrency === 'eur') {
         walletCreditInEUR = netPaid; // শুধুমাত্র নেট অ্যামাউন্ট ওয়ালেটে যাবে
       } else {
-        const fxRate = await getExchangeRate(originalCurrency, 'EUR');
+        fxRate = await getExchangeRate(originalCurrency, 'EUR');
         walletCreditInEUR = Number((netPaid * fxRate).toFixed(2));
       }
 
@@ -155,13 +160,14 @@ export const handleStripeWebhook = async (req, res) => {
           {
             creator: creatorId,
             stripeSessionId: session.id,
-            amountPaid: totalPaid, // ইউজার যা পে করেছে (Net + VAT)
+            amountPaid: totalPaid,
             currency: originalCurrency.toUpperCase(),
-            amountInEUR: walletCreditInEUR, // ওয়ালেটে যা ঢুকেছে (Net)
+            amountInEUR: walletCreditInEUR,
             packageType: 'wallet_topup',
             status: 'completed',
-            vatAmount: vatPaid, // কত ট্যাক্স কাটা হয়েছে
+            vatAmount: vatPaid,
             invoiceNumber: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            fxRate: fxRate,
           },
         ],
         { session: dbSession }
@@ -209,7 +215,7 @@ export const purchasePromotion = async (req, res) => {
         .status(400)
         .json({ success: false, message: `Minimum PPC budget is €${PPC_CONFIG.MIN_AMOUNT}` });
     }
-    
+
     const expectedClicks = Math.floor(amountInEUR / PPC_CONFIG.COST_PER_CLICK);
     if (totalClicks !== expectedClicks) {
       return res.status(400).json({ success: false, message: 'PPC Click calculation mismatch.' });

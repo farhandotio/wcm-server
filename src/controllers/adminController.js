@@ -837,7 +837,7 @@ export const manageListings = async (req, res) => {
         ...item,
         creatorName: item.creatorId
           ? `${item.creatorId.firstName || ''} ${item.creatorId.lastName || ''}`.trim() ||
-            item.creatorId.username
+          item.creatorId.username
           : 'Unknown Creator',
         categoryName: item.category?.title || 'Uncategorized',
         ppcStatus: ppcBalance.toFixed(2),
@@ -1609,18 +1609,24 @@ export const getAdminStats = async (req, res) => {
     let totalStripeFees = 0;
 
     allSuccessfulTopups.forEach((t) => {
-      const amount = Number(t.amountPaid) || 0;
-      totalRevenue += amount;
-      totalVat += Number(t.vatAmount) || 0;
-      // Stripe Fee: 2.9% + 0.30 EUR
-      totalStripeFees += amount * 0.029 + 0.3;
+      const amount = Number(t.amountInEUR) || 0;      // €100 net
+      const originalAmount = Number(t.amountPaid) || 0; // €119 total paid
+      const fxRate = Number(t.fxRate) || 1;
+
+      totalRevenue += amount;                           // €100
+      totalVat += Number(t.vatAmount) || 0;            // €19 আলাদা track
+
+      // Stripe fee €119 এর উপর হয়
+      const stripeFeeOriginal = originalAmount * 0.029 + 0.3;
+      totalStripeFees += Number((stripeFeeOriginal / fxRate).toFixed(2));
     });
 
-    // ২. Net Earned Revenue (নির্ভরযোগ্য আয়)
+    // 2. Net Profit (টোটাল রেভিনিউ থেকে ভ্যাট এবং ফি বাদ)
+    const netProfit = totalRevenue - totalStripeFees;  // €100 - Stripe Fee
+
+    // 3. Net Earned Revenue (নির্ভরযোগ্য আয়)
     const netEarnedRevenue = auditTotals[0]?.totalEarned || 0;
 
-    // ৩. Net Profit (টোটাল রেভিনিউ থেকে ভ্যাট এবং ফি বাদ)
-    const netProfit = totalRevenue - totalVat - totalStripeFees;
 
     // ৪. Active Promotions Count
     const activePromotionsCount = await Listing.countDocuments({
