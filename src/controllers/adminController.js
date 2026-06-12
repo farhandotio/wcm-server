@@ -1574,59 +1574,35 @@ export const getAdminStats = async (req, res) => {
         },
       ]),
       AuditLog.aggregate([
-        {
-          $match: {
-            action: { $in: ['PPC_CLICK_DEDUCTION', 'BOOST_DAILY_EARNED'] },
-          },
-        },
-        {
-          $project: {
-            // "0.3 EUR" থেকে নাম্বার বের করা
-            rawAmount: { $ifNull: ['$details.costDeducted', '$details.earnedAmount'] },
-          },
-        },
-        {
-          $project: {
-            amount: {
-              $toDouble: {
-                $arrayElemAt: [{ $split: ['$rawAmount', ' '] }, 0],
-              },
-            },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            totalEarned: { $sum: '$amount' },
-          },
-        },
+        { $match: { action: { $in: ['PPC_CLICK_DEDUCTION', 'BOOST_DAILY_EARNED'] } } },
+        { $project: { rawAmount: { $ifNull: ['$details.costDeducted', '$details.earnedAmount'] } } },
+        { $project: { amount: { $toDouble: { $arrayElemAt: [{ $split: ['$rawAmount', ' '] }, 0] } } } },
+        { $group: { _id: null, totalEarned: { $sum: '$amount' } } },
       ]),
     ]);
 
-    // ১. ফিন্যান্সিয়াল ক্যালকুলেশন (Real Money In from Stripe)
+    // ১. Financial Calculation
     let totalRevenue = 0;
     let totalVat = 0;
     let totalStripeFees = 0;
 
     allSuccessfulTopups.forEach((t) => {
-      const amount = Number(t.amountInEUR) || 0;      // €100 net
-      const originalAmount = Number(t.amountPaid) || 0; // €119 total paid
-      const fxRate = Number(t.fxRate) || 1;
+      const amountEUR = Number(t.amountInEUR) || 0;
+      totalRevenue += amountEUR;
+      totalVat += Number(t.vatAmount) || 0;
 
-      totalRevenue += amount;                           // €100
-      totalVat += Number(t.vatAmount) || 0;            // €19 আলাদা track
+      const stripeFee = t.currency !== 'EUR'
+        ? amountEUR * 0.0573
+        : amountEUR * 0.0373;
 
-      // Stripe fee €119 এর উপর হয়
-      const stripeFeeOriginal = originalAmount * 0.029 + 0.3;
-      totalStripeFees += Number((stripeFeeOriginal / fxRate).toFixed(2));
+      totalStripeFees += Number(stripeFee.toFixed(2));
     });
 
-    // 2. Net Profit (টোটাল রেভিনিউ থেকে ভ্যাট এবং ফি বাদ)
-    const netProfit = totalRevenue - totalStripeFees;  // €100 - Stripe Fee
+    // ২. Net Profit
+    const netProfit = totalRevenue - totalStripeFees;
 
-    // 3. Net Earned Revenue (নির্ভরযোগ্য আয়)
+    // ৩. Net Earned Revenue
     const netEarnedRevenue = auditTotals[0]?.totalEarned || 0;
-
 
     // ৪. Active Promotions Count
     const activePromotionsCount = await Listing.countDocuments({
@@ -1636,7 +1612,7 @@ export const getAdminStats = async (req, res) => {
       ],
     });
 
-    // ৫. চার্ট ডেটা (Revenue Flow)
+    // ৫. Chart Data
     const dailyData = await Transaction.aggregate([
       {
         $match: {
@@ -1648,8 +1624,7 @@ export const getAdminStats = async (req, res) => {
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          revenue: { $sum: '$amountPaid' },
-          vat: { $sum: '$vatAmount' },
+          revenue: { $sum: '$amountInEUR' },
           count: { $sum: 1 },
         },
       },
@@ -1658,11 +1633,11 @@ export const getAdminStats = async (req, res) => {
 
     const revenueFlow = dailyData.map((d) => {
       const dailyRev = d.revenue || 0;
-      const dailyFee = dailyRev * 0.029 + d.count * 0.3;
+      const dailyFee = dailyRev * 0.0373;
       return {
         date: d._id,
         revenue: Number(dailyRev.toFixed(2)),
-        profit: Number(Math.max(0, dailyRev - (d.vat || 0) - dailyFee).toFixed(2)),
+        profit: Number(Math.max(0, dailyRev - dailyFee).toFixed(2)),
       };
     });
 

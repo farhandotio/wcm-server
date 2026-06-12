@@ -753,7 +753,13 @@ export const getPublicListings = async (req, res) => {
       query.createdAt = { $gte: startOfWeek.setHours(0, 0, 0, 0) };
     }
 
-    if (creatorId) query.creatorId = creatorId;
+    if (creatorId) {
+      if (mongoose.Types.ObjectId.isValid(creatorId)) {
+        query.creatorId = new mongoose.Types.ObjectId(creatorId);
+      } else {
+        query.creatorId = new mongoose.Types.ObjectId(); // invalid হলে খালি রেজাল্ট
+      }
+    }
 
     // ── Search filter ─────────────────────────────────────────
     if (search) {
@@ -1069,10 +1075,10 @@ export const getCuratedCollections = async (req, res) => {
     // France local time get kori (CEST/CET auto handle hobe)
     const franceTime = new Date().toLocaleString("en-US", { timeZone: "Europe/Paris" });
     const franceDate = new Date(franceTime);
-    
+
     // France er current date (1-31)
     const franceDayOfMonth = franceDate.getDate();
-    
+
     // France er even/odd check kore start index determine
     const startIndex = franceDayOfMonth % 2 === 0 ? 0 : 4;
     const dailyCategoryIds = SELECTED_CATEGORY_IDS.slice(startIndex, startIndex + 4);
