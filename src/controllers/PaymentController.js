@@ -217,9 +217,6 @@ export const purchasePromotion = async (req, res) => {
     }
 
     const expectedClicks = Math.floor(amountInEUR / PPC_CONFIG.COST_PER_CLICK);
-    if (totalClicks !== expectedClicks) {
-      return res.status(400).json({ success: false, message: 'PPC Click calculation mismatch.' });
-    }
   }
 
   const dbSession = await mongoose.startSession();
@@ -275,11 +272,19 @@ export const purchasePromotion = async (req, res) => {
       );
       // -------------------------------------------
     } else if (packageType === 'ppc') {
+      if (amountInEUR < PPC_CONFIG.MIN_AMOUNT) {
+        return res
+          .status(400)
+          .json({ success: false, message: `Minimum PPC budget is €${PPC_CONFIG.MIN_AMOUNT}` });
+      }
+
+      const calculatedClicks = Math.floor(amountInEUR / PPC_CONFIG.COST_PER_CLICK);
+
       listing.promotion.ppc.isActive = true;
       listing.promotion.ppc.isPaused = false;
       listing.promotion.ppc.ppcBalance += amountInEUR;
       listing.promotion.ppc.amountPaid += amountInEUR;
-      listing.promotion.ppc.totalClicks += parseInt(totalClicks);
+      listing.promotion.ppc.totalClicks += calculatedClicks;
 
       listing.promotion.ppc.costPerClick = Number(
         (listing.promotion.ppc.amountPaid / listing.promotion.ppc.totalClicks).toFixed(4)
@@ -465,12 +470,12 @@ export const generateInvoice = async (req, res) => {
     }
 
     const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();   // 210
+    const pageHeight = doc.internal.pageSize.getHeight(); // 297
+
     const totalPaid = transaction.amountPaid;
     const vatAmount = transaction.vatAmount || 0;
     const currency = transaction.currency.toUpperCase();
-
-    // --- সমস্যা এখানে ছিল: ম্যানুয়াল ক্যালকুলেশন বাদ দিয়ে ডাটাবেস থেকে রেট নিন ---
-    // যদি ডাটাবেসে vatRate না থাকে তবেই কেবল ক্যালকুলেট করবে
     const netAmount = Number((totalPaid - vatAmount).toFixed(2));
     const vatRateDisplay = transaction.vatRate
       ? transaction.vatRate.toFixed(2)
@@ -478,83 +483,307 @@ export const generateInvoice = async (req, res) => {
         ? ((vatAmount / netAmount) * 100).toFixed(2)
         : '0.00';
 
-    // --- Header Style (অপরিবর্তিত) ---
+    // ─────────────────────────────────────────────
+    // HEADER BACKGROUND — dark charcoal top bar
+    // ─────────────────────────────────────────────
+    doc.setFillColor(20, 20, 20);
+    doc.rect(0, 0, pageWidth, 45, 'F');
+
+    // Orange accent strip at bottom of header
     doc.setFillColor(249, 115, 22);
-    doc.rect(0, 0, 210, 40, 'F');
+    doc.rect(0, 42, pageWidth, 3, 'F');
+
+    // ─────────────────────────────────────────────
+    // WCM LOGO — Left side (drawn logo block)
+    // ─────────────────────────────────────────────
+    // Outer orange rounded square
+    doc.setFillColor(249, 115, 22);
+    doc.roundedRect(10, 6, 28, 28, 3, 3, 'F');
+
+    // Inner white "WCM" text
     doc.setTextColor(255, 255, 255);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('WCM', 24, 17, { align: 'center' });
+
+    // Small tagline under logo letters
+    doc.setFontSize(5);
+    doc.setFont('helvetica', 'normal');
+    doc.text('EST. 2024', 24, 22, { align: 'center' });
+
+    // Decorative dot pattern (3 small circles)
+    doc.setFillColor(255, 255, 255);
+    doc.circle(19, 27, 1.2, 'F');
+    doc.circle(24, 27, 1.2, 'F');
+    doc.circle(29, 27, 1.2, 'F');
+
+    // ─────────────────────────────────────────────
+    // SITE NAME — Right side
+    // ─────────────────────────────────────────────
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text('World Culture Market Place', pageWidth - 12, 18, { align: 'right' });
+
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(200, 200, 200);
+    doc.text(process.env.BUSINESS_WEBSITE || 'www.worldculturemarketplace.com', pageWidth - 12, 25, { align: 'right' });
+    doc.text(process.env.BUSINESS_EMAIL || 'support@wcm.com', pageWidth - 12, 31, { align: 'right' });
+
+    // ─────────────────────────────────────────────
+    // INVOICE TITLE SECTION
+    // ─────────────────────────────────────────────
+    // Light gray background for invoice info
+    doc.setFillColor(248, 248, 248);
+    doc.rect(0, 48, pageWidth, 38, 'F');
+
+    // Left: INVOICE label + number
+    doc.setTextColor(249, 115, 22);
     doc.setFontSize(22);
     doc.setFont('helvetica', 'bold');
-    doc.text('OFFICIAL INVOICE', 15, 25);
-    doc.setFontSize(10);
-    doc.text(process.env.BUSINESS_NAME || 'DRAKILO COLLECTIVE', 195, 25, { align: 'right' });
+    doc.text('INVOICE', 15, 63);
 
-    // --- Details Section ---
-    doc.setTextColor(40, 40, 40);
+    doc.setTextColor(80, 80, 80);
     doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`Invoice No:`, 15, 55);
     doc.setFont('helvetica', 'normal');
-    doc.text(transaction.invoiceNumber || `INV-${transaction._id.toString().slice(-6)}`, 40, 55);
+    doc.text(`# ${transaction.invoiceNumber || `INV-${transaction._id.toString().slice(-6).toUpperCase()}`}`, 15, 72);
 
     const formattedDate = new Date(transaction.createdAt).toLocaleString('en-GB', {
       day: '2-digit',
-      month: '2-digit',
+      month: 'long',
       year: 'numeric',
+    });
+    const formattedTime = new Date(transaction.createdAt).toLocaleString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
     });
-    doc.text(`Date: ${formattedDate}`, 15, 62);
+    doc.setFontSize(9);
+    doc.setTextColor(120, 120, 120);
+    doc.text(`Issued: ${formattedDate} at ${formattedTime}`, 15, 80);
 
+    // Right: STATUS BADGE
+    const statusColors = {
+      completed: [34, 197, 94],
+      pending: [234, 179, 8],
+      failed: [239, 68, 68],
+    };
+    const statusLabel = (transaction.status || 'completed').toUpperCase();
+    const [sr, sg, sb] = statusColors[transaction.status] || [34, 197, 94];
+    doc.setFillColor(sr, sg, sb);
+    doc.roundedRect(pageWidth - 50, 55, 38, 12, 3, 3, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
-    doc.text('Bill To:', 140, 55);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`${transaction.creator.firstName} ${transaction.creator.lastName}`, 140, 62);
-    doc.text(transaction.creator.email, 140, 68);
+    doc.text(statusLabel, pageWidth - 31, 63, { align: 'center' });
 
-    // --- Table ---
+    // ─────────────────────────────────────────────
+    // DIVIDER
+    // ─────────────────────────────────────────────
+    doc.setDrawColor(230, 230, 230);
+    doc.setLineWidth(0.5);
+    doc.line(15, 90, pageWidth - 15, 90);
+
+    // ─────────────────────────────────────────────
+    // BILL TO / PAYMENT DETAILS SECTION
+    // ─────────────────────────────────────────────
+    // Left: Bill To
+    doc.setTextColor(249, 115, 22);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('BILL TO', 15, 100);
+
+    doc.setDrawColor(249, 115, 22);
+    doc.setLineWidth(0.8);
+    doc.line(15, 102, 45, 102);
+
+    doc.setTextColor(40, 40, 40);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${transaction.creator.firstName} ${transaction.creator.lastName}`, 15, 110);
+
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80, 80, 80);
+    doc.text(transaction.creator.email, 15, 117);
+    if (transaction.creator.role) {
+      doc.text(`Role: ${transaction.creator.role.charAt(0).toUpperCase() + transaction.creator.role.slice(1)}`, 15, 123);
+    }
+
+    // Right: Payment Summary Box
+    doc.setFillColor(20, 20, 20);
+    doc.roundedRect(pageWidth - 80, 93, 68, 36, 3, 3, 'F');
+
+    doc.setTextColor(249, 115, 22);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PAYMENT SUMMARY', pageWidth - 46, 101, { align: 'center' });
+
+    doc.setTextColor(180, 180, 180);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Net Amount:', pageWidth - 78, 110);
+    doc.text('VAT:', pageWidth - 78, 117);
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${netAmount.toFixed(2)} ${currency}`, pageWidth - 14, 110, { align: 'right' });
+    doc.text(`${vatAmount.toFixed(2)} ${currency}`, pageWidth - 14, 117, { align: 'right' });
+
+    // Total inside dark box
+    doc.setDrawColor(249, 115, 22);
+    doc.setLineWidth(0.4);
+    doc.line(pageWidth - 78, 120, pageWidth - 14, 120);
+
+    doc.setTextColor(249, 115, 22);
+    doc.setFontSize(9);
+    doc.text('TOTAL:', pageWidth - 78, 127);
+    doc.setFontSize(10);
+    doc.text(`${totalPaid.toFixed(2)} ${currency}`, pageWidth - 14, 127, { align: 'right' });
+
+    // ─────────────────────────────────────────────
+    // ITEMS TABLE
+    // ─────────────────────────────────────────────
     autoTable(doc, {
-      startY: 80,
-      head: [['Service Description', 'Net Price', 'VAT Amount', 'Total']],
+      startY: 137,
+      head: [['#', 'Service Description', 'Net Price', 'VAT', 'Total']],
       body: [
         [
+          '01',
           {
-            content: `${transaction.packageType.replace('_', ' ').toUpperCase()}\n${transaction.listing?.title ? `Asset: ${transaction.listing.title}` : 'Wallet Top-up'}`,
-            styles: { cellPadding: 5 },
+            content: `${transaction.packageType.replace(/_/g, ' ').toUpperCase()}\n${transaction.listing?.title ? `Asset: ${transaction.listing.title}` : 'Wallet Top-up'}`,
+            styles: { cellPadding: { top: 5, right: 5, bottom: 5, left: 5 } },
           },
           `${netAmount.toFixed(2)} ${currency}`,
-          `${vatAmount.toFixed(2)} (${vatRateDisplay}%)`,
+          `${vatAmount.toFixed(2)}\n(${vatRateDisplay}%)`,
           `${totalPaid.toFixed(2)} ${currency}`,
         ],
       ],
-      headStyles: { fillColor: [30, 30, 30], fontStyle: 'bold' },
-      styles: { fontSize: 9, valign: 'middle' },
+      headStyles: {
+        fillColor: [20, 20, 20],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 9,
+        halign: 'center',
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 12 },
+        1: { cellWidth: 80 },
+        2: { halign: 'right', cellWidth: 30 },
+        3: { halign: 'center', cellWidth: 30 },
+        4: { halign: 'right', cellWidth: 35, fontStyle: 'bold' },
+      },
+      bodyStyles: {
+        fontSize: 9,
+        valign: 'middle',
+        textColor: [40, 40, 40],
+      },
+      alternateRowStyles: { fillColor: [252, 252, 252] },
+      styles: { lineColor: [220, 220, 220], lineWidth: 0.3 },
       theme: 'grid',
     });
 
-    const finalY = doc.lastAutoTable.finalY + 15;
+    const finalY = doc.lastAutoTable.finalY;
 
-    // --- Summary Section ---
-    doc.setFontSize(12);
+    // ─────────────────────────────────────────────
+    // GRAND TOTAL ROW
+    // ─────────────────────────────────────────────
+    doc.setFillColor(249, 115, 22);
+    doc.rect(pageWidth - 90, finalY + 5, 78, 14, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
-    doc.text('Grand Total:', 130, finalY);
-    doc.text(`${totalPaid.toFixed(2)} ${currency}`, 195, finalY, { align: 'right' });
+    doc.text('GRAND TOTAL:', pageWidth - 88, finalY + 14);
+    doc.setFontSize(12);
+    doc.text(`${totalPaid.toFixed(2)} ${currency}`, pageWidth - 14, finalY + 14, { align: 'right' });
 
-    // --- Exchange Rate Info ---
+    // ─────────────────────────────────────────────
+    // EXCHANGE RATE INFO (if applicable)
+    // ─────────────────────────────────────────────
     if (currency !== 'EUR' && transaction.fxRate) {
+      doc.setFillColor(255, 247, 237);
+      doc.roundedRect(15, finalY + 24, 100, 16, 2, 2, 'F');
+      doc.setDrawColor(249, 115, 22);
+      doc.setLineWidth(0.4);
+      doc.roundedRect(15, finalY + 24, 100, 16, 2, 2, 'S');
+
       doc.setFontSize(8);
       doc.setFont('helvetica', 'italic');
-      doc.setTextColor(100, 100, 100);
-      doc.text(`Exchange Rate: 1 ${currency} = ${transaction.fxRate} EUR`, 15, finalY + 10);
-      doc.text(`Accounting Value: ${transaction.amountInEUR.toFixed(2)} EUR`, 15, finalY + 15);
+      doc.setTextColor(100, 80, 40);
+      doc.text(`Exchange Rate: 1 ${currency} = ${transaction.fxRate} EUR`, 20, finalY + 32);
+      doc.text(`Accounting Value: ${transaction.amountInEUR.toFixed(2)} EUR`, 20, finalY + 38);
     }
 
-    // --- Footer ---
-    doc.setFontSize(8);
-    doc.setTextColor(150, 150, 150);
-    doc.text('This Invoice is generated by WCM Payment System.', 105, 285, {
-      align: 'center',
-    });
+    // ─────────────────────────────────────────────
+    // NOTES / TERMS SECTION
+    // ─────────────────────────────────────────────
+    const notesY = finalY + (currency !== 'EUR' && transaction.fxRate ? 48 : 28);
 
+    doc.setDrawColor(230, 230, 230);
+    doc.setLineWidth(0.4);
+    doc.line(15, notesY, pageWidth - 15, notesY);
+
+    doc.setTextColor(249, 115, 22);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TERMS & CONDITIONS', 15, notesY + 8);
+
+    doc.setTextColor(140, 140, 140);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('• All transactions are final and non-refundable unless stated otherwise.', 15, notesY + 15);
+    doc.text('• This invoice is system-generated and valid without a signature.', 15, notesY + 21);
+    doc.text('• For disputes, contact support within 7 days of the transaction date.', 15, notesY + 27);
+
+    // ─────────────────────────────────────────────
+    // "PAID" DIAGONAL WATERMARK (if completed)
+    // ─────────────────────────────────────────────
+    if ((transaction.status || 'completed') === 'completed') {
+      doc.saveGraphicsState();
+      doc.setTextColor(34, 197, 94);
+      doc.setFontSize(55);
+      doc.setFont('helvetica', 'bold');
+      doc.setGState(doc.GState({ opacity: 0.07 }));
+      doc.text('PAID', pageWidth / 2, pageHeight / 2 + 20, {
+        align: 'center',
+        angle: 35,
+      });
+      doc.restoreGraphicsState();
+    }
+
+    // ─────────────────────────────────────────────
+    // ORANGE HORIZONTAL LINE BEFORE FOOTER
+    // ─────────────────────────────────────────────
+    doc.setFillColor(249, 115, 22);
+    doc.rect(0, pageHeight - 20, pageWidth, 2.5, 'F');
+
+    // Thin dark strip at very bottom
+    doc.setFillColor(20, 20, 20);
+    doc.rect(0, pageHeight - 17.5, pageWidth, 17.5, 'F');
+
+    // ─────────────────────────────────────────────
+    // FOOTER
+    // ─────────────────────────────────────────────
+    doc.setTextColor(200, 200, 200);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      'This invoice is generated by the WCM Payment System  |  World Culture Market Place  |  All rights reserved.',
+      pageWidth / 2,
+      pageHeight - 9,
+      { align: 'center' }
+    );
+    doc.setTextColor(249, 115, 22);
+    doc.text(
+      process.env.BUSINESS_WEBSITE || 'www.worldculturemarketplace.com',
+      pageWidth / 2,
+      pageHeight - 4,
+      { align: 'center' }
+    );
+
+    // ─────────────────────────────────────────────
+    // OUTPUT
+    // ─────────────────────────────────────────────
     const pdfBuffer = doc.output('arraybuffer');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
