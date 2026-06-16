@@ -16,6 +16,15 @@ import {
 import { calculateVAT } from '../utils/vatHelper.js';
 import AuditLog from '../models/AuditLog.js';
 import { BOOST_PACKAGES, PPC_CONFIG } from '../constants/promotion.js';
+// একদম উপরে এভাবে লিখুন
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const imagePath = path.join(process.cwd(), 'public', 'wc,-web-logo.png');
 
 const getExchangeRate = async (fromCurrency, toCurrency) => {
   try {
@@ -471,75 +480,85 @@ export const generateInvoice = async (req, res) => {
     }
 
     const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.getWidth();   // 210
-    const pageHeight = doc.internal.pageSize.getHeight(); // 297
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
 
-    const totalPaid = transaction.amountPaid;
-    const vatAmount = transaction.vatAmount || 0;
-    const currency = transaction.currency.toUpperCase();
-    const netAmount = Number((totalPaid - vatAmount).toFixed(2));
-    const vatRateDisplay = transaction.vatRate
-      ? transaction.vatRate.toFixed(2)
-      : netAmount > 0
-        ? ((vatAmount / netAmount) * 100).toFixed(2)
-        : '0.00';
+    // ── Core values ───────────────────────────────
+    const totalPaid = transaction.amountPaid;                    // e.g. $121.00 USD
+    const currency = transaction.currency.toUpperCase();        // e.g. USD
+    const fxRate = transaction.fxRate || 1;
+    const amountInEUR = Number(transaction.amountInEUR) || 0;     // net EUR credited to wallet (e.g. €89.01)
+    const vatAmountEUR = Number(transaction.vatAmount) || 0;     // VAT in EUR (e.g. €18.11)
+    const isNonEUR = currency !== 'EUR';                       // ✅ fix 1
+
+    // ── Display amounts (original currency) ───────
+    // amountInEUR = net only (VAT already excluded in webhook)
+    // back-calculate to original currency for display
+    const netAmount = currency === 'EUR'
+      ? amountInEUR
+      : Number((amountInEUR / fxRate).toFixed(2));                 // e.g. $100.00
+
+    const vatAmount = currency === 'EUR'
+      ? vatAmountEUR
+      : Number((vatAmountEUR / fxRate).toFixed(2));                // e.g. $21.00
+
+    const vatRateDisplay = netAmount > 0
+      ? ((vatAmount / netAmount) * 100).toFixed(2)
+      : '0.00';
+
+    // ── Stripe fee calculation ────────────────────
+    // Stripe cuts fee from totalPaid converted to EUR
+    const totalPaidInEUR = Number((totalPaid * fxRate).toFixed(2)); // e.g. €104.51
+    const processingFeePercent = 0.0373;
+    const conversionFeePercent = isNonEUR ? 0.02 : 0;
+    const totalFeePercent = processingFeePercent + conversionFeePercent; // ✅ fix 2
+
+    const processingFee = Number((totalPaidInEUR * processingFeePercent).toFixed(2));
+    const conversionFee = Number((totalPaidInEUR * conversionFeePercent).toFixed(2));
+    const totalStripeFee = Number((processingFee + conversionFee).toFixed(2));
+
+    // netReceived = what WCM actually gets (after fees, VAT excluded)
+    const netReceived = Number((totalPaidInEUR - totalStripeFee - vatAmountEUR).toFixed(2));
 
     // ─────────────────────────────────────────────
-    // HEADER BACKGROUND — dark charcoal top bar
+    // HEADER BACKGROUND 
     // ─────────────────────────────────────────────
-    doc.setFillColor(20, 20, 20);
+    doc.setFillColor(255, 255, 255);
     doc.rect(0, 0, pageWidth, 45, 'F');
 
-    // Orange accent strip at bottom of header
     doc.setFillColor(249, 115, 22);
     doc.rect(0, 42, pageWidth, 3, 'F');
-
     // ─────────────────────────────────────────────
-    // WCM LOGO — Left side (drawn logo block)
+    // WCM LOGO
     // ─────────────────────────────────────────────
-    // Outer orange rounded square
-    doc.setFillColor(249, 115, 22);
-    doc.roundedRect(10, 6, 28, 28, 3, 3, 'F');
+    try {
+      // ফাইলটি পড়ুন
+      const imageBuffer = fs.readFileSync(imagePath);
+      doc.addImage(imageBuffer, 'PNG', 10, 6, 48, 24);
 
-    // Inner white "WCM" text
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.text('WCM', 24, 17, { align: 'center' });
-
-    // Small tagline under logo letters
-    doc.setFontSize(5);
-    doc.setFont('helvetica', 'normal');
-    doc.text('EST. 2024', 24, 22, { align: 'center' });
-
-    // Decorative dot pattern (3 small circles)
-    doc.setFillColor(255, 255, 255);
-    doc.circle(19, 27, 1.2, 'F');
-    doc.circle(24, 27, 1.2, 'F');
-    doc.circle(29, 27, 1.2, 'F');
-
+    } catch (err) {
+      console.error("logo problem", err);
+    }
     // ─────────────────────────────────────────────
-    // SITE NAME — Right side
+    // SITE NAME (টেক্সটগুলো কালো করার জন্য আপডেট করা হলো)
     // ─────────────────────────────────────────────
-    doc.setTextColor(255, 255, 255);
+    doc.setTextColor(0, 0, 0); // সাদা থেকে কালো করা হলো
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
     doc.text('World Culture Market Place', pageWidth - 12, 18, { align: 'right' });
 
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(200, 200, 200);
+    doc.setTextColor(50, 50, 50);
     doc.text(process.env.BUSINESS_WEBSITE || 'www.worldculturemarketplace.com', pageWidth - 12, 25, { align: 'right' });
-    doc.text(process.env.BUSINESS_EMAIL || 'support@wcm.com', pageWidth - 12, 31, { align: 'right' });
+    doc.text(process.env.BUSINESS_EMAIL || 'worldculturemarketplace.web@gmail.com', pageWidth - 12, 31, { align: 'right' });
 
     // ─────────────────────────────────────────────
     // INVOICE TITLE SECTION
     // ─────────────────────────────────────────────
-    // Light gray background for invoice info
     doc.setFillColor(248, 248, 248);
     doc.rect(0, 48, pageWidth, 38, 'F');
 
-    // Left: INVOICE label + number
     doc.setTextColor(249, 115, 22);
     doc.setFontSize(22);
     doc.setFont('helvetica', 'bold');
@@ -551,19 +570,16 @@ export const generateInvoice = async (req, res) => {
     doc.text(`# ${transaction.invoiceNumber || `INV-${transaction._id.toString().slice(-6).toUpperCase()}`}`, 15, 72);
 
     const formattedDate = new Date(transaction.createdAt).toLocaleString('en-GB', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric',
+      day: '2-digit', month: 'long', year: 'numeric',
     });
     const formattedTime = new Date(transaction.createdAt).toLocaleString('en-GB', {
-      hour: '2-digit',
-      minute: '2-digit',
+      hour: '2-digit', minute: '2-digit',
     });
     doc.setFontSize(9);
     doc.setTextColor(120, 120, 120);
     doc.text(`Issued: ${formattedDate} at ${formattedTime}`, 15, 80);
 
-    // Right: STATUS BADGE
+    // STATUS BADGE
     const statusColors = {
       completed: [34, 197, 94],
       pending: [234, 179, 8],
@@ -586,9 +602,8 @@ export const generateInvoice = async (req, res) => {
     doc.line(15, 90, pageWidth - 15, 90);
 
     // ─────────────────────────────────────────────
-    // BILL TO / PAYMENT DETAILS SECTION
+    // BILL TO
     // ─────────────────────────────────────────────
-    // Left: Bill To
     doc.setTextColor(249, 115, 22);
     doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
@@ -611,7 +626,7 @@ export const generateInvoice = async (req, res) => {
       doc.text(`Role: ${transaction.creator.role.charAt(0).toUpperCase() + transaction.creator.role.slice(1)}`, 15, 123);
     }
 
-    // Right: Payment Summary Box
+    // PAYMENT SUMMARY BOX (right)
     doc.setFillColor(20, 20, 20);
     doc.roundedRect(pageWidth - 80, 93, 68, 36, 3, 3, 'F');
 
@@ -631,7 +646,6 @@ export const generateInvoice = async (req, res) => {
     doc.text(`${netAmount.toFixed(2)} ${currency}`, pageWidth - 14, 110, { align: 'right' });
     doc.text(`${vatAmount.toFixed(2)} ${currency}`, pageWidth - 14, 117, { align: 'right' });
 
-    // Total inside dark box
     doc.setDrawColor(249, 115, 22);
     doc.setLineWidth(0.4);
     doc.line(pageWidth - 78, 120, pageWidth - 14, 120);
@@ -674,11 +688,7 @@ export const generateInvoice = async (req, res) => {
         3: { halign: 'center', cellWidth: 30 },
         4: { halign: 'right', cellWidth: 35, fontStyle: 'bold' },
       },
-      bodyStyles: {
-        fontSize: 9,
-        valign: 'middle',
-        textColor: [40, 40, 40],
-      },
+      bodyStyles: { fontSize: 9, valign: 'middle', textColor: [40, 40, 40] },
       alternateRowStyles: { fillColor: [252, 252, 252] },
       styles: { lineColor: [220, 220, 220], lineWidth: 0.3 },
       theme: 'grid',
@@ -699,26 +709,106 @@ export const generateInvoice = async (req, res) => {
     doc.text(`${totalPaid.toFixed(2)} ${currency}`, pageWidth - 14, finalY + 14, { align: 'right' });
 
     // ─────────────────────────────────────────────
-    // EXCHANGE RATE INFO (if applicable)
+    // EXCHANGE RATE INFO (non-EUR only)
     // ─────────────────────────────────────────────
-    if (currency !== 'EUR' && transaction.fxRate) {
+    let afterGrandTotal = finalY + 24;
+
+    if (isNonEUR && transaction.fxRate) {
       doc.setFillColor(255, 247, 237);
-      doc.roundedRect(15, finalY + 24, 100, 16, 2, 2, 'F');
+      doc.roundedRect(15, finalY + 24, pageWidth - 30, 16, 2, 2, 'F');
       doc.setDrawColor(249, 115, 22);
       doc.setLineWidth(0.4);
-      doc.roundedRect(15, finalY + 24, 100, 16, 2, 2, 'S');
+      doc.roundedRect(15, finalY + 24, pageWidth - 30, 16, 2, 2, 'S');
 
       doc.setFontSize(8);
       doc.setFont('helvetica', 'italic');
       doc.setTextColor(100, 80, 40);
-      doc.text(`Exchange Rate: 1 ${currency} = ${transaction.fxRate} EUR`, 20, finalY + 32);
-      doc.text(`Accounting Value: ${transaction.amountInEUR.toFixed(2)} EUR`, 20, finalY + 38);
+      doc.text(`Exchange Rate: 1 ${currency} = ${fxRate} EUR`, 20, finalY + 32);
+      doc.text(`Total Paid in EUR: €${totalPaidInEUR.toFixed(2)} EUR  |  Net Wallet Credit: €${amountInEUR.toFixed(2)} EUR`, 20, finalY + 38);
+
+      afterGrandTotal = finalY + 46;
     }
 
     // ─────────────────────────────────────────────
-    // NOTES / TERMS SECTION
+    // STRIPE FEE BREAKDOWN
     // ─────────────────────────────────────────────
-    const notesY = finalY + (currency !== 'EUR' && transaction.fxRate ? 48 : 28);
+    const feeBoxY = afterGrandTotal + 6;
+    const feeBoxH = isNonEUR ? 58 : 48;
+
+    doc.setFillColor(245, 245, 245);
+    doc.roundedRect(15, feeBoxY, pageWidth - 30, feeBoxH, 3, 3, 'F');
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(15, feeBoxY, pageWidth - 30, feeBoxH, 3, 3, 'S');
+
+    // Orange left accent
+    doc.setFillColor(249, 115, 22);
+    doc.rect(15, feeBoxY, 3, feeBoxH, 'F');
+
+    // Title
+    doc.setTextColor(249, 115, 22);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('STRIPE FEE BREAKDOWN', 23, feeBoxY + 8);
+
+    // Column headers
+    doc.setTextColor(140, 140, 140);
+    doc.setFontSize(7.5);
+    doc.text('FEE TYPE', 23, feeBoxY + 16);
+    doc.text('RATE', 130, feeBoxY + 16, { align: 'right' });
+    doc.text('AMOUNT (EUR)', pageWidth - 17, feeBoxY + 16, { align: 'right' });
+
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.3);
+    doc.line(23, feeBoxY + 18, pageWidth - 17, feeBoxY + 18);
+
+    // Row 1 — Processing Fee
+    doc.setTextColor(60, 60, 60);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Stripe Processing Fee', 23, feeBoxY + 25);
+    doc.setTextColor(120, 120, 120);
+    doc.text('3.73%', 130, feeBoxY + 25, { align: 'right' });
+    doc.setTextColor(60, 60, 60);
+    doc.text(`€${processingFee.toFixed(2)}`, pageWidth - 17, feeBoxY + 25, { align: 'right' });
+
+    let nextRowY = feeBoxY + 32;
+
+    // Row 2 — Conversion Fee (non-EUR only)
+    if (isNonEUR) {
+      doc.setTextColor(60, 60, 60);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Currency Conversion Fee (${currency} → EUR)`, 23, nextRowY);
+      doc.setTextColor(120, 120, 120);
+      doc.text('2.00%', 130, nextRowY, { align: 'right' });
+      doc.setTextColor(60, 60, 60);
+      doc.text(`€${conversionFee.toFixed(2)}`, pageWidth - 17, nextRowY, { align: 'right' });
+      nextRowY += 7;
+    }
+
+    // Divider
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.3);
+    doc.line(23, nextRowY, pageWidth - 17, nextRowY);
+    nextRowY += 5;
+
+    // Total Stripe Fees
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(239, 68, 68);
+    doc.text('Total Stripe Fees', 23, nextRowY);
+    doc.text(`${(totalFeePercent * 100).toFixed(2)}%`, 130, nextRowY, { align: 'right' });
+    doc.text(`- €${totalStripeFee.toFixed(2)}`, pageWidth - 17, nextRowY, { align: 'right' });
+    nextRowY += 7;
+
+    // Net Received by WCM
+    doc.setTextColor(34, 197, 94);
+    doc.text('Net Received by WCM', 23, nextRowY);
+    doc.text(`€${netReceived.toFixed(2)}`, pageWidth - 17, nextRowY, { align: 'right' });
+
+    // ─────────────────────────────────────────────
+    // TERMS & CONDITIONS
+    // ─────────────────────────────────────────────
+    const notesY = feeBoxY + feeBoxH + 10;
 
     doc.setDrawColor(230, 230, 230);
     doc.setLineWidth(0.4);
@@ -735,9 +825,12 @@ export const generateInvoice = async (req, res) => {
     doc.text('• All transactions are final and non-refundable unless stated otherwise.', 15, notesY + 15);
     doc.text('• This invoice is system-generated and valid without a signature.', 15, notesY + 21);
     doc.text('• For disputes, contact support within 7 days of the transaction date.', 15, notesY + 27);
+    doc.setTextColor(180, 180, 180);
+    doc.setFontSize(7);
+    doc.text('* Stripe fees are estimated at 3.73% (EUR) / 5.73% (Non-EUR) and may vary slightly.', 15, notesY + 34);
 
     // ─────────────────────────────────────────────
-    // "PAID" DIAGONAL WATERMARK (if completed)
+    // PAID WATERMARK
     // ─────────────────────────────────────────────
     if ((transaction.status || 'completed') === 'completed') {
       doc.saveGraphicsState();
@@ -745,41 +838,30 @@ export const generateInvoice = async (req, res) => {
       doc.setFontSize(55);
       doc.setFont('helvetica', 'bold');
       doc.setGState(doc.GState({ opacity: 0.07 }));
-      doc.text('PAID', pageWidth / 2, pageHeight / 2 + 20, {
-        align: 'center',
-        angle: 35,
-      });
+      doc.text('PAID', pageWidth / 2, pageHeight / 2 + 20, { align: 'center', angle: 35 });
       doc.restoreGraphicsState();
     }
 
     // ─────────────────────────────────────────────
-    // ORANGE HORIZONTAL LINE BEFORE FOOTER
+    // FOOTER
     // ─────────────────────────────────────────────
     doc.setFillColor(249, 115, 22);
     doc.rect(0, pageHeight - 20, pageWidth, 2.5, 'F');
 
-    // Thin dark strip at very bottom
     doc.setFillColor(20, 20, 20);
     doc.rect(0, pageHeight - 17.5, pageWidth, 17.5, 'F');
 
-    // ─────────────────────────────────────────────
-    // FOOTER
-    // ─────────────────────────────────────────────
     doc.setTextColor(200, 200, 200);
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
     doc.text(
       'This invoice is generated by the WCM Payment System  |  World Culture Market Place  |  All rights reserved.',
-      pageWidth / 2,
-      pageHeight - 9,
-      { align: 'center' }
+      pageWidth / 2, pageHeight - 9, { align: 'center' }
     );
     doc.setTextColor(249, 115, 22);
     doc.text(
       process.env.BUSINESS_WEBSITE || 'www.worldculturemarketplace.com',
-      pageWidth / 2,
-      pageHeight - 4,
-      { align: 'center' }
+      pageWidth / 2, pageHeight - 4, { align: 'center' }
     );
 
     // ─────────────────────────────────────────────
@@ -787,11 +869,9 @@ export const generateInvoice = async (req, res) => {
     // ─────────────────────────────────────────────
     const pdfBuffer = doc.output('arraybuffer');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename=Invoice-${transaction.invoiceNumber}.pdf`
-    );
+    res.setHeader('Content-Disposition', `inline; filename=Invoice-${transaction.invoiceNumber}.pdf`);
     res.send(Buffer.from(pdfBuffer));
+
   } catch (err) {
     console.error('Invoice Gen Error:', err);
     res.status(500).json({ message: 'Error generating PDF invoice' });
