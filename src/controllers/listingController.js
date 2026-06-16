@@ -371,8 +371,8 @@ export const updateListing = async (req, res) => {
           .map((t) => t.trim())
           .filter((t) => t !== '');
 
-      if (tags.length > 5) {
-        return res.status(400).json({ message: 'Maximum 5 cultural tags allowed' });
+      if (tags.length > 10) {
+        return res.status(400).json({ message: 'Maximum 10 cultural tags allowed' });
       }
       listing.culturalTags = tags;
     }
@@ -405,9 +405,9 @@ export const updateListing = async (req, res) => {
       if (updateData[field] !== undefined) listing[field] = updateData[field];
     });
 
-    // FIX: country পরিবর্তন হলে continent ও update করা (আগে missing ছিল)
-    if (updateData.country) {
-      listing.continent = getContinentByCountry(updateData.country);
+    // FIX: getContinentByIsoCode দিয়ে continent update করা
+    if (updateData.countryIsoCode) {
+      listing.continent = getContinentByIsoCode(updateData.countryIsoCode);
     }
 
     await listing.save();

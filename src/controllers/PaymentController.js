@@ -138,13 +138,14 @@ export const handleStripeWebhook = async (req, res) => {
 
       let walletCreditInEUR = 0;
       let fxRate = 1;
+      let vatInEUR = vatPaid;
 
       if (originalCurrency === 'eur') {
         walletCreditInEUR = netPaid;
       } else {
         fxRate = await getExchangeRate(originalCurrency, 'EUR');
-        // API fail হলে fxRate = 1 থাকবে
         walletCreditInEUR = Number((netPaid * fxRate).toFixed(2));
+        vatInEUR = Number((vatPaid * fxRate).toFixed(2));
       }
 
       // ২. ওয়ালেট আপডেট
@@ -165,7 +166,7 @@ export const handleStripeWebhook = async (req, res) => {
             amountInEUR: walletCreditInEUR,
             packageType: 'wallet_topup',
             status: 'completed',
-            vatAmount: vatPaid,
+            vatAmount: vatInEUR,  // vatPaid এর বদলে vatInEUR  
             invoiceNumber: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
             fxRate: fxRate,
           },
