@@ -6,14 +6,9 @@ const verificationSchema = new mongoose.Schema({
         required: [true, 'Name is required'],
         trim: true
     },
-    metaName: {
+    rawHtml: {
         type: String,
-        required: [true, 'Meta name is required'],
-        trim: true
-    },
-    content: {
-        type: String,
-        required: [true, 'Content is required'],
+        required: [true, 'HTML/Script code is required'],
         trim: true
     },
     isActive: {
