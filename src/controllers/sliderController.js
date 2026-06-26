@@ -14,15 +14,8 @@ export const getSliders = async (req, res) => {
 // ২. নতুন স্লাইডার অ্যাড করা (Admin Only)
 export const addSlider = async (req, res) => {
   try {
-    const { title, subTitle, link, imageUrl, public_id } = req.body;
-
-    const newSlider = new Slider({
-      title,
-      subTitle,
-      link,
-      imageUrl,
-      public_id
-    });
+    const { title, subTitle, link, imageUrl, public_id, alt } = req.body;
+    const newSlider = new Slider({ title, subTitle, link, imageUrl, public_id, alt });
 
     await newSlider.save();
     res.status(201).json({ message: "Slider added successfully", newSlider });
@@ -52,13 +45,9 @@ export const deleteSlider = async (req, res) => {
 export const updateSlider = async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, subTitle, link, imageUrl, public_id } = req.body;
+    const { title, subTitle, link, imageUrl, public_id, alt } = req.body;
 
-    const updatedSlider = await Slider.findByIdAndUpdate(
-      id,
-      { title, subTitle, link, imageUrl, public_id },
-      { new: true } // এটি আপডেট হওয়া নতুন ডাটাটি রিটার্ন করবে
-    );
+    const updatedSlider = await Slider.findByIdAndUpdate(id, { title, subTitle, link, imageUrl, public_id, alt }, { new: true });
 
     if (!updatedSlider) return res.status(404).json({ message: "Slider not found" });
 
