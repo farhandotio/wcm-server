@@ -13,6 +13,7 @@ import { applyPromotionLogic, resetPPC } from '../utils/promotionHelper.js';
 import slugify from 'slugify';
 import { getContinentByIsoCode } from '../constants/continentByCountry.js';
 import crypto from 'crypto';
+import { submitToIndexNow } from '../utils/indexnow.js';
 import {
   buildVersionedCacheKey,
   getCache,
@@ -334,6 +335,9 @@ export const createListing = async (req, res) => {
       slug: newListing.slug,
       creatorId: req.user._id,
     });
+
+    // ✅ নতুন যোগ করা লাইন — Bing IndexNow-এ URL সাবমিট করা (non-blocking)
+    submitToIndexNow(newListing.slug);
 
     res.status(201).json({
       message: 'Listing created successfully',
