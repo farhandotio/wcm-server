@@ -17,7 +17,7 @@ import {
   forgotPassword,
   verifyEmail,
 } from '../controllers/userController.js';
-import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
+import { authMiddleware, authorizeRoles, requireActiveAccount } from '../middlewares/auth.js';
 
 const router = express.Router();
 
@@ -58,6 +58,7 @@ router.put(
 router.post(
   '/become-creator',
   authMiddleware,
+  requireActiveAccount,
   authorizeRoles('user'),
   upload.fields([
     { name: 'profileImage', maxCount: 1 },

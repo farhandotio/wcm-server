@@ -8,8 +8,18 @@ const interactionLogSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now, expires: 86400 },
 });
 
-interactionLogSchema.index({ listingId: 1, deviceId: 1, type: 1 });
-interactionLogSchema.index({ listingId: 1, userId: 1, type: 1 });
+interactionLogSchema.index(
+  { listingId: 1, deviceId: 1, type: 1 },
+  { unique: true, name: 'unique_listing_device_interaction' }
+);
+interactionLogSchema.index(
+  { listingId: 1, userId: 1, type: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { userId: { $type: 'objectId' } },
+    name: 'unique_listing_user_interaction',
+  }
+);
 
 const InteractionLog = mongoose.model('InteractionLog', interactionLogSchema);
 export default InteractionLog;

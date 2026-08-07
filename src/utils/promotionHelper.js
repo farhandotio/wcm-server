@@ -2,8 +2,12 @@
 
 export const resetBoost = (listing) => {
   listing.promotion.boost.isActive = false;
+  listing.promotion.boost.isPaused = false;
+  listing.promotion.boost.pausedAt = null;
   listing.promotion.boost.expiresAt = null;
   listing.promotion.boost.amountPaid = 0;
+  listing.promotion.boost.durationDays = 0;
+  listing.promotion.boost.purchases = [];
 };
 
 export const resetPPC = (listing) => {
@@ -55,11 +59,11 @@ export const checkAndCleanupExpiry = (listing) => {
 
 //   listing.promotion.level = Math.floor(boostScore + ppcScore);
 
-//   listing.isPromoted =
+//   listing.promotion.isPromoted =
 //     (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) ||
 //     (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused);
 
-//   if (!listing.isPromoted) {
+//   if (!listing.promotion.isPromoted) {
 //     listing.promotion.level = 0;
 //   }
 
@@ -86,11 +90,11 @@ export const applyPromotionLogic = (listing) => {
 
   listing.promotion.level = Math.floor(boostScore + ppcScore);
 
-  listing.isPromoted =
+  listing.promotion.isPromoted =
     (listing.promotion.boost.isActive && !listing.promotion.boost.isPaused) ||
     (listing.promotion.ppc.isActive && !listing.promotion.ppc.isPaused);
 
-  if (!listing.isPromoted) listing.promotion.level = 0;
+  if (!listing.promotion.isPromoted) listing.promotion.level = 0;
 
   return listing;
 };

@@ -60,13 +60,22 @@ export const calculateVAT = (countryCode, isBusiness, isValidVAT) => {
 };
 
 export const validateVatWithVIES = async (vatNumber) => {
-  if (!vatNumber) return false;
+  if (!vatNumber) return { status: 'not_applicable', isValid: false };
   try {
-    const response = await axios.get(`https://api.vatcomply.com/vat?vat_number=${vatNumber}`);
-    return response.data.valid;
+    const response = await axios.get(
+      `https://api.vatcomply.com/vat?vat_number=${encodeURIComponent(vatNumber)}`,
+      { timeout: 8000 }
+    );
+    if (typeof response.data?.valid !== 'boolean') {
+      throw new Error('VAT verification service returned an invalid response');
+    }
+    return {
+      status: response.data.valid ? 'valid' : 'invalid',
+      isValid: response.data.valid,
+    };
   } catch (error) {
     console.error('VAT Validation Error:', error.message);
-    return false;
+    return { status: 'verification_pending', isValid: false };
   }
 };
 

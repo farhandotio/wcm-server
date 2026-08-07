@@ -16,6 +16,7 @@ import {
 import { calculateVAT } from '../utils/vatHelper.js';
 import AuditLog from '../models/AuditLog.js';
 import { BOOST_PACKAGES, PPC_CONFIG } from '../constants/promotion.js';
+import { recalculateListingScore } from '../utils/listingScoreCalculator.js';
 // একদম উপরে এভাবে লিখুন
 import path from 'path';
 import fs from 'fs';
@@ -233,8 +234,10 @@ export const purchasePromotion = async (req, res) => {
   dbSession.startTransaction();
 
   try {
-    const listing = await Listing.findById(listingId).session(dbSession);
+    const listing = await Listing.findOne({ _id: listingId, creatorId: userId }).session(dbSession);
     const user = await User.findById(userId).session(dbSession);
+
+    if (!listing) throw new Error('Listing not found or access denied.');
 
     if (user.walletBalance < amountInEUR) throw new Error('Insufficient wallet balance.');
 
@@ -244,19 +247,68 @@ export const purchasePromotion = async (req, res) => {
 
     if (packageType === 'boost') {
       const boostDays = parseInt(days);
+      const purchaseTime = new Date();
+      const boostState = listing.promotion.boost;
+
+      if (boostState.isActive && boostState.isPaused && boostState.pausedAt) {
+        const pausedAt = new Date(boostState.pausedAt);
+        const pausedDurationMs = Math.max(0, purchaseTime.getTime() - pausedAt.getTime());
+        if (boostState.expiresAt) {
+          boostState.expiresAt = new Date(
+            new Date(boostState.expiresAt).getTime() + pausedDurationMs
+          );
+        }
+        for (const purchase of boostState.purchases || []) {
+          if (new Date(purchase.expiresAt) > pausedAt) {
+            purchase.startsAt = new Date(new Date(purchase.startsAt).getTime() + pausedDurationMs);
+            purchase.expiresAt = new Date(new Date(purchase.expiresAt).getTime() + pausedDurationMs);
+          }
+        }
+      }
+
       let currentExpiry =
-        listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > new Date()
+        listing.promotion.boost.isActive && listing.promotion.boost.expiresAt > purchaseTime
           ? new Date(listing.promotion.boost.expiresAt)
-          : new Date();
+          : purchaseTime;
+
+      if (
+        listing.promotion.boost.isActive &&
+        listing.promotion.boost.expiresAt > purchaseTime &&
+        (!listing.promotion.boost.purchases || listing.promotion.boost.purchases.length === 0)
+      ) {
+        const legacyDays = Number(listing.promotion.boost.durationDays) || 1;
+        const legacyExpiry = new Date(listing.promotion.boost.expiresAt);
+        const legacyStart = new Date(legacyExpiry.getTime() - legacyDays * 24 * 60 * 60 * 1000);
+        listing.promotion.boost.purchases = [
+          {
+            amountPaid: Number(listing.promotion.boost.amountPaid) || 0,
+            durationDays: legacyDays,
+            startsAt: legacyStart,
+            expiresAt: legacyExpiry,
+            purchasedAt: legacyStart,
+          },
+        ];
+      }
+
+      const packageStartsAt = new Date(currentExpiry);
+      const packageExpiresAt = new Date(packageStartsAt);
+      packageExpiresAt.setDate(packageExpiresAt.getDate() + boostDays);
 
       listing.promotion.boost.isActive = true;
       listing.promotion.boost.isPaused = false;
+      listing.promotion.boost.pausedAt = null;
       listing.promotion.boost.amountPaid = (listing.promotion.boost.amountPaid || 0) + amountInEUR;
       listing.promotion.boost.durationDays =
         (listing.promotion.boost.durationDays || 0) + boostDays;
 
-      currentExpiry.setDate(currentExpiry.getDate() + boostDays);
-      listing.promotion.boost.expiresAt = currentExpiry;
+      listing.promotion.boost.expiresAt = packageExpiresAt;
+      listing.promotion.boost.purchases.push({
+        amountPaid: amountInEUR,
+        durationDays: boostDays,
+        startsAt: packageStartsAt,
+        expiresAt: packageExpiresAt,
+        purchasedAt: purchaseTime,
+      });
 
       // --- নতুন লজিক: আজকের দিনের আর্নিং অডিট লগ ---
       // আজকের দিনের জন্য আর্নড অ্যামাউন্ট (আজকের অংশটুকু রিফান্ড হবে না)
@@ -288,17 +340,21 @@ export const purchasePromotion = async (req, res) => {
           .json({ success: false, message: `Minimum PPC budget is €${PPC_CONFIG.MIN_AMOUNT}` });
       }
 
-      const calculatedClicks = Math.floor(amountInEUR / PPC_CONFIG.COST_PER_CLICK);
+      const fixedCostPerClick = PPC_CONFIG.COST_PER_CLICK;
+      const calculatedClicks = Math.floor(amountInEUR / fixedCostPerClick);
+      const existingRemainingClicks = Math.floor(
+        (Number(listing.promotion.ppc.ppcBalance) || 0) / fixedCostPerClick
+      );
+      const existingExecutedClicks = Number(listing.promotion.ppc.executedClicks) || 0;
 
       listing.promotion.ppc.isActive = true;
       listing.promotion.ppc.isPaused = false;
       listing.promotion.ppc.ppcBalance += amountInEUR;
       listing.promotion.ppc.amountPaid += amountInEUR;
-      listing.promotion.ppc.totalClicks += calculatedClicks;
+      listing.promotion.ppc.totalClicks =
+        existingExecutedClicks + existingRemainingClicks + calculatedClicks;
 
-      listing.promotion.ppc.costPerClick = Number(
-        (listing.promotion.ppc.amountPaid / listing.promotion.ppc.totalClicks).toFixed(4)
-      );
+      listing.promotion.ppc.costPerClick = fixedCostPerClick;
     }
 
     applyPromotionLogic(listing);
@@ -324,6 +380,7 @@ export const purchasePromotion = async (req, res) => {
     );
 
     await dbSession.commitTransaction();
+    await recalculateListingScore(listingId);
     res.status(200).json({
       success: true,
       transactionId: transaction[0]._id,
@@ -339,15 +396,49 @@ export const purchasePromotion = async (req, res) => {
 
 export const togglePausePromotion = async (req, res) => {
   const { listingId, packageType } = req.body;
+  const userId = req.user._id;
   try {
-    const listing = await Listing.findById(listingId);
+    const listing = await Listing.findOne({ _id: listingId, creatorId: userId });
+    if (!listing) {
+      return res.status(404).json({ success: false, message: 'Listing not found or access denied.' });
+    }
+
     if (packageType === 'boost') {
-      listing.promotion.boost.isPaused = !listing.promotion.boost.isPaused;
+      const boost = listing.promotion.boost;
+      if (!boost.isActive) {
+        return res.status(400).json({ success: false, message: 'No active boost campaign.' });
+      }
+
+      if (!boost.isPaused) {
+        boost.isPaused = true;
+        boost.pausedAt = new Date();
+      } else {
+        const resumedAt = new Date();
+        const pausedAt = boost.pausedAt ? new Date(boost.pausedAt) : resumedAt;
+        const pausedDurationMs = Math.max(0, resumedAt.getTime() - pausedAt.getTime());
+
+        if (boost.expiresAt) {
+          boost.expiresAt = new Date(new Date(boost.expiresAt).getTime() + pausedDurationMs);
+        }
+
+        for (const purchase of boost.purchases || []) {
+          if (new Date(purchase.expiresAt) > pausedAt) {
+            purchase.startsAt = new Date(new Date(purchase.startsAt).getTime() + pausedDurationMs);
+            purchase.expiresAt = new Date(new Date(purchase.expiresAt).getTime() + pausedDurationMs);
+          }
+        }
+
+        boost.isPaused = false;
+        boost.pausedAt = null;
+      }
     } else if (packageType === 'ppc') {
       listing.promotion.ppc.isPaused = !listing.promotion.ppc.isPaused;
+    } else {
+      return res.status(400).json({ success: false, message: 'Invalid promotion type.' });
     }
     applyPromotionLogic(listing);
     await listing.save();
+    await recalculateListingScore(listingId);
     res.status(200).json({
       success: true,
       isPaused:
@@ -359,17 +450,18 @@ export const togglePausePromotion = async (req, res) => {
 };
 
 export const cancelPromotion = async (req, res) => {
-  const { listingId, packageType } = req.body;
+  const listingId = req.body.listingId || req.params.id;
+  const packageType = req.body.packageType || req.body.type;
   const userId = req.user._id;
 
   const dbSession = await mongoose.startSession();
   dbSession.startTransaction();
 
   try {
-    const listing = await Listing.findById(listingId).session(dbSession);
+    const listing = await Listing.findOne({ _id: listingId, creatorId: userId }).session(dbSession);
     const user = await User.findById(userId).session(dbSession);
 
-    if (!listing) throw new Error('Listing not found');
+    if (!listing) throw new Error('Listing not found or access denied.');
 
     let refundAmount = 0;
     const now = new Date();
@@ -377,10 +469,40 @@ export const cancelPromotion = async (req, res) => {
     if (packageType === 'boost' && listing.promotion?.boost?.isActive) {
       const boost = listing.promotion.boost;
       const expiry = new Date(boost.expiresAt);
+      const refundCalculationTime = boost.isPaused && boost.pausedAt ? new Date(boost.pausedAt) : now;
 
-      if (expiry > now) {
+      if (expiry > refundCalculationTime) {
         const totalPaid = Number(boost.amountPaid) || 0;
         const totalDays = Number(boost.durationDays) || 1;
+        const dayMs = 24 * 60 * 60 * 1000;
+        const purchases = boost.purchases || [];
+
+        if (purchases.length > 0) {
+          refundAmount = purchases.reduce((sum, purchase) => {
+            const startsAt = new Date(purchase.startsAt);
+            const purchaseExpiry = new Date(purchase.expiresAt);
+            const purchaseDays = Number(purchase.durationDays) || 1;
+            const purchaseAmount = Number(purchase.amountPaid) || 0;
+
+            if (purchaseExpiry <= refundCalculationTime) return sum;
+            if (startsAt > refundCalculationTime) return sum + purchaseAmount;
+
+            // A started 24-hour campaign day is charged in full.
+            const startedDays = Math.max(
+              1,
+              Math.ceil((refundCalculationTime.getTime() - startsAt.getTime()) / dayMs)
+            );
+            const refundableDays = Math.max(0, purchaseDays - startedDays);
+            return sum + refundableDays * (purchaseAmount / purchaseDays);
+          }, 0);
+          refundAmount = Number(refundAmount.toFixed(2));
+        } else {
+          // Backward-compatible fallback for campaigns created before package tracking.
+          const dailyRate = totalPaid / totalDays;
+          const remainingTimeMs = expiry.getTime() - refundCalculationTime.getTime();
+          const remainingDays = Math.floor(remainingTimeMs / dayMs);
+          refundAmount = Number((Math.max(0, remainingDays) * dailyRate).toFixed(2));
+        }
 
         // ১. প্রতিদিনের রেট বের করা
         const dailyRate = totalPaid / totalDays;
@@ -389,7 +511,7 @@ export const cancelPromotion = async (req, res) => {
         const remainingTimeMs = expiry.getTime() - now.getTime();
         const remainingDays = Math.floor(remainingTimeMs / (24 * 60 * 60 * 1000));
 
-        if (remainingDays > 0) {
+        if (purchases.length === 0 && !boost.isPaused && remainingDays > 0) {
           refundAmount = Number((remainingDays * dailyRate).toFixed(2));
         }
 
@@ -404,9 +526,11 @@ export const cancelPromotion = async (req, res) => {
       // ৪. রিফান্ড হোক বা না হোক, বুস্টের দিন এবং টাকা ০ করে ফ্রেশ করা (আপনার রিকোয়ারমেন্ট অনুযায়ী)
       boost.isActive = false;
       boost.isPaused = false;
+      boost.pausedAt = null;
       boost.amountPaid = 0;
       boost.durationDays = 0; // এখানে ০ করে দেওয়া হলো
       boost.expiresAt = null;
+      boost.purchases = [];
     } else if (packageType === 'ppc' && listing.promotion?.ppc?.isActive) {
       refundAmount = listing.promotion.ppc.ppcBalance || 0;
 
@@ -417,6 +541,12 @@ export const cancelPromotion = async (req, res) => {
       listing.promotion.ppc.amountPaid = 0;
       listing.promotion.ppc.totalClicks = 0;
       listing.promotion.ppc.executedClicks = 0;
+    } else if (packageType === 'boost') {
+      throw new Error('No active boost campaign.');
+    } else if (packageType === 'ppc') {
+      throw new Error('No active PPC campaign.');
+    } else {
+      throw new Error('Invalid promotion type.');
     }
 
     // ৫. ওয়ালেট আপডেট এবং ট্রানজেকশন রেকর্ড
@@ -446,11 +576,12 @@ export const cancelPromotion = async (req, res) => {
     await listing.save({ session: dbSession });
 
     await dbSession.commitTransaction();
+    await recalculateListingScore(listingId);
     res.status(200).json({
       success: true,
       refundAmount,
       newBalance: user.walletBalance,
-      message: `Refunded €${refundAmount} and boost refreshed.`,
+      message: `${packageType.toUpperCase()} cancelled and €${refundAmount} refunded.`,
     });
   } catch (error) {
     await dbSession.abortTransaction();

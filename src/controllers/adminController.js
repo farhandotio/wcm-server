@@ -21,6 +21,7 @@ import {
 import { fileURLToPath } from 'url';
 import { backupDB } from '../utils/dbBackup.js';
 import { restoreDB } from '../utils/dbRestore.js';
+import { recalculateListingScore } from '../utils/listingScoreCalculator.js';
 
 
 // Get Regions by Category
@@ -408,13 +409,20 @@ export const pinListing = async (req, res) => {
     const { position, categoryId } = req.body; // position: 1, 2, 3, or 4
 
     // ১. ওই ক্যাটাগরিতে এই পজিশনে আগে কেউ পিন করা থাকলে তাকে সরিয়ে দিন (Conflict Management)
-    await Listing.updateOne(
+    const displacedListing = await Listing.findOne(
       {
         category: categoryId,
         'promotion.pinnedPosition': position,
-      },
-      { $set: { 'promotion.pinnedPosition': null } }
-    );
+        _id: { $ne: id },
+      }
+    ).select('_id slug creatorId');
+
+    if (displacedListing) {
+      await Listing.updateOne(
+        { _id: displacedListing._id },
+        { $set: { 'promotion.pinnedPosition': null } }
+      );
+    }
 
     // ২. নতুন লিস্টিংটিকে ওই পজিশনে পিন করুন
     const updatedListing = await Listing.findByIdAndUpdate(
@@ -422,6 +430,25 @@ export const pinListing = async (req, res) => {
       { $set: { 'promotion.pinnedPosition': position } },
       { new: true }
     );
+
+    await Promise.all([
+      recalculateListingScore(updatedListing._id),
+      displacedListing ? recalculateListingScore(displacedListing._id) : Promise.resolve(),
+    ]);
+    await Promise.all([
+      invalidateListingCaches({
+        id: updatedListing._id,
+        slug: updatedListing.slug,
+        creatorId: updatedListing.creatorId,
+      }),
+      displacedListing
+        ? invalidateListingCaches({
+            id: displacedListing._id,
+            slug: displacedListing.slug,
+            creatorId: displacedListing.creatorId,
+          })
+        : Promise.resolve(),
+    ]);
 
     res
       .status(200)
@@ -434,7 +461,19 @@ export const pinListing = async (req, res) => {
 export const unpinListing = async (req, res) => {
   try {
     const { id } = req.params;
-    await Listing.findByIdAndUpdate(id, { $set: { 'promotion.pinnedPosition': null } });
+    const listing = await Listing.findByIdAndUpdate(
+      id,
+      { $set: { 'promotion.pinnedPosition': null } },
+      { new: true }
+    );
+    if (listing) {
+      await recalculateListingScore(listing._id);
+      await invalidateListingCaches({
+        id: listing._id,
+        slug: listing.slug,
+        creatorId: listing.creatorId,
+      });
+    }
     res.status(200).json({ message: 'Listing unpinned successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -772,6 +811,50 @@ export const rejectCreator = async (req, res) => {
   }
 };
 
+export const reviewCreatorVat = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status } = req.body;
+
+    if (!['valid', 'invalid'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'VAT review status must be valid or invalid.',
+      });
+    }
+
+    const applicant = await User.findById(userId);
+    if (!applicant) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+    if (applicant.profile?.customerType !== 'business' || !applicant.profile?.vatNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Manual VAT review requires a business applicant with a VAT number.',
+      });
+    }
+
+    applicant.profile.vatVerificationStatus = status;
+    applicant.profile.isVatValid = status === 'valid';
+    applicant.profile.vatLastChecked = new Date();
+    await applicant.save();
+    await invalidateUserProfileCaches({
+      id: applicant._id,
+      username: applicant.username,
+      slug: applicant.slug,
+    });
+
+    const user = await User.findById(applicant._id).select('-password').lean();
+    return res.status(200).json({
+      success: true,
+      message: `VAT marked as ${status}.`,
+      user,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const toggleUserStatus = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -842,7 +925,8 @@ export const manageListings = async (req, res) => {
         categoryName: item.category?.title || 'Uncategorized',
         ppcStatus: ppcBalance.toFixed(2),
         boostStatus: boostRemaining,
-        isCurrentlyPromoted: item.isPromoted && (ppcBalance > 0 || boostRemaining.includes('left')),
+        isCurrentlyPromoted:
+          item.promotion?.isPromoted && (ppcBalance > 0 || boostRemaining.includes('left')),
       };
     });
 
@@ -911,6 +995,7 @@ export const updateListingStatus = async (req, res) => {
     }
 
     await listing.save();
+    await recalculateListingScore(listing._id);
     await invalidateListingCaches({
       id: listing._id,
       slug: listing.slug,
@@ -1391,9 +1476,10 @@ export const updatePpcBalanceManual = async (req, res) => {
 
     listing.promotion.ppc.ppcBalance = newBalance;
     listing.promotion.ppc.isActive = newBalance > 0;
-    listing.isPromoted = true;
+    listing.promotion.isPromoted = newBalance > 0 && !listing.promotion.ppc.isPaused;
 
     await listing.save();
+    await recalculateListingScore(listing._id);
     await invalidateListingCaches({
       id: listing._id,
       slug: listing.slug,
@@ -1472,7 +1558,7 @@ export const getPromotedListings = async (req, res) => {
     // ৪. ডাটা ফেচিং
     const listings = await Listing.find(query)
       .populate('creatorId', 'firstName lastName email username')
-      .sort({ 'promotion.level': -1, updatedAt: -1 })
+      .sort({ score: -1, updatedAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .lean();

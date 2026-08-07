@@ -8,8 +8,12 @@ import mongoose from 'mongoose';
 import { calculateListingLevel } from '../utils/levelCalculator.js';
 import Analytics from '../models/Analytics.js';
 import InteractionLog from '../models/InteractionLog.js';
+import Transaction from '../models/Transaction.js';
 import { createAuditLog } from '../utils/logger.js';
-import { applyPromotionLogic, resetPPC } from '../utils/promotionHelper.js';
+import { applyPromotionLogic } from '../utils/promotionHelper.js';
+import { PPC_CONFIG } from '../constants/promotion.js';
+import { recalculateListingScore } from '../utils/listingScoreCalculator.js';
+import { getReportingDateBucket } from '../utils/reportingTime.js';
 import slugify from 'slugify';
 import { getContinentByIsoCode } from '../constants/continentByCountry.js';
 import crypto from 'crypto';
@@ -50,7 +54,7 @@ const ensureListingFavoriteState = (listing) => {
   listing.promotion.ppc.isActive ??= false;
   listing.promotion.ppc.isPaused ??= false;
   listing.promotion.ppc.ppcBalance ??= 0;
-  listing.promotion.ppc.costPerClick ??= 0.1;
+  listing.promotion.ppc.costPerClick ??= PPC_CONFIG.COST_PER_CLICK;
   listing.promotion.ppc.amountPaid ??= 0;
   listing.promotion.ppc.totalClicks ??= 0;
   listing.promotion.ppc.executedClicks ??= 0;
@@ -74,6 +78,180 @@ const getContinentByCountry = (countryName) => {
 // PPC Click Handle করা
 // ─────────────────────────────────────────────
 export const handlePpcClick = async (req, res) => {
+  const { id } = req.params;
+  const deviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId.trim() : '';
+  const userId = req.user?._id || null;
+
+  if (!deviceId) {
+    return res.status(400).json({ success: false, message: 'Security token (deviceId) missing.' });
+  }
+
+  const duplicateQuery = {
+    listingId: id,
+    type: 'ppc_click',
+    $or: [{ deviceId }, ...(userId ? [{ userId }] : [])],
+  };
+
+  const dbSession = await mongoose.startSession();
+  let committedListing = null;
+  let chargedCost = 0;
+  let refundedRemainder = 0;
+  let isBudgetExhausted = false;
+
+  try {
+    dbSession.startTransaction();
+
+    const listing = await Listing.findById(id).session(dbSession);
+    if (!listing) {
+      await dbSession.abortTransaction();
+      return res.status(404).json({ success: false, message: 'Listing not found' });
+    }
+
+    const ppc = listing.promotion?.ppc;
+    if (!ppc?.isActive || ppc.ppcBalance <= 0) {
+      await dbSession.abortTransaction();
+      return res.status(200).json({ success: true, message: 'Organic click recorded.' });
+    }
+
+    if (ppc.isPaused) {
+      await dbSession.abortTransaction();
+      return res
+        .status(200)
+        .json({ success: true, message: 'Campaign paused, organic click recorded.' });
+    }
+
+    const alreadyClicked = await InteractionLog.findOne(duplicateQuery).session(dbSession);
+    if (alreadyClicked) {
+      await dbSession.abortTransaction();
+      return res.status(200).json({ success: true, message: 'Duplicate click ignored.' });
+    }
+
+    await InteractionLog.create(
+      [{ listingId: id, userId, deviceId, type: 'ppc_click' }],
+      { session: dbSession }
+    );
+
+    const cost = PPC_CONFIG.COST_PER_CLICK;
+    if (ppc.ppcBalance < cost) {
+      await dbSession.abortTransaction();
+      return res.status(400).json({ success: false, message: 'Insufficient PPC balance.' });
+    }
+
+    chargedCost = cost;
+    ppc.costPerClick = cost;
+    ppc.ppcBalance = Number((ppc.ppcBalance - cost).toFixed(4));
+    ppc.executedClicks = (ppc.executedClicks || 0) + 1;
+
+    if (ppc.ppcBalance < cost) {
+      refundedRemainder = Number(ppc.ppcBalance.toFixed(2));
+      isBudgetExhausted = true;
+
+      if (refundedRemainder > 0) {
+        await User.findByIdAndUpdate(
+          listing.creatorId,
+          { $inc: { walletBalance: refundedRemainder } },
+          { session: dbSession }
+        );
+        await Transaction.create(
+          [
+            {
+              creator: listing.creatorId,
+              listing: listing._id,
+              amountPaid: refundedRemainder,
+              currency: 'EUR',
+              fxRate: 1,
+              amountInEUR: refundedRemainder,
+              packageType: 'refund_ppc',
+              status: 'completed',
+              invoiceNumber: `REF-PPC-${Date.now()}-${listing._id.toString().slice(-4)}`,
+            },
+          ],
+          { session: dbSession }
+        );
+      }
+
+      ppc.isActive = false;
+      ppc.isPaused = false;
+      ppc.ppcBalance = 0;
+      ppc.amountPaid = 0;
+      ppc.totalClicks = 0;
+      ppc.executedClicks = 0;
+    }
+
+    applyPromotionLogic(listing);
+    await listing.save({ session: dbSession });
+
+    const today = getReportingDateBucket();
+    await Analytics.findOneAndUpdate(
+      { listingId: id, date: today },
+      {
+        $inc: { clicks: 1 },
+        $setOnInsert: { creatorId: listing.creatorId },
+      },
+      { upsert: true, session: dbSession }
+    );
+
+    await dbSession.commitTransaction();
+    committedListing = listing;
+  } catch (error) {
+    if (dbSession.inTransaction()) await dbSession.abortTransaction();
+    if (error?.code === 11000) {
+      return res.status(200).json({ success: true, message: 'Duplicate click ignored.' });
+    }
+    if (error?.code === 112 || error?.errorLabels?.includes?.('TransientTransactionError')) {
+      const duplicateAfterConflict = await InteractionLog.findOne(duplicateQuery).lean();
+      if (duplicateAfterConflict) {
+        return res.status(200).json({ success: true, message: 'Duplicate click ignored.' });
+      }
+
+      req.ppcTransactionRetryCount = (req.ppcTransactionRetryCount || 0) + 1;
+      if (req.ppcTransactionRetryCount <= 3) {
+        return handlePpcClick(req, res);
+      }
+
+      return res.status(503).json({
+        success: false,
+        message: 'PPC click is busy. Please retry.',
+      });
+    }
+    console.error('PPC Click Error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await dbSession.endSession();
+  }
+
+  await Promise.all([
+    recalculateListingScore(committedListing._id),
+    invalidateListingCaches({
+      id: committedListing._id,
+      slug: committedListing.slug,
+      creatorId: committedListing.creatorId,
+    }),
+    createAuditLog({
+      req,
+      user: committedListing.creatorId,
+      action: 'PPC_CLICK_DEDUCTION',
+      targetType: 'Listing',
+      targetId: committedListing._id,
+      details: {
+        listingTitle: committedListing.title,
+        costDeducted: `${chargedCost} EUR`,
+        remainingPpcBalance: `${committedListing.promotion.ppc.ppcBalance} EUR`,
+        refundedRemainder: `${refundedRemainder} EUR`,
+        isBudgetExhausted,
+      },
+    }),
+  ]);
+
+  return res.status(200).json({
+    success: true,
+    balance: committedListing.promotion.ppc.ppcBalance,
+    currentLevel: committedListing.promotion.level,
+    refundedRemainder,
+  });
+};
+
+const handlePpcClickLegacy = async (req, res) => {
   try {
     const { id } = req.params;
     const { deviceId } = req.body;
@@ -107,7 +285,7 @@ export const handlePpcClick = async (req, res) => {
       return res.status(200).json({ message: 'Duplicate click ignored.' });
     }
 
-    const cost = listing.promotion.ppc.costPerClick || 0.1;
+    const cost = listing.promotion.ppc.costPerClick || PPC_CONFIG.COST_PER_CLICK;
 
     if (listing.promotion.ppc.ppcBalance >= cost) {
       listing.promotion.ppc.ppcBalance = Number(
@@ -115,7 +293,6 @@ export const handlePpcClick = async (req, res) => {
       );
       listing.promotion.ppc.executedClicks += 1;
       // FIX: totalClicks ও বাড়ানো হচ্ছে (আগে missing ছিল)
-      listing.promotion.ppc.totalClicks = (listing.promotion.ppc.totalClicks || 0) + 1;
 
       let isBudgetExhausted = false;
 
@@ -159,8 +336,7 @@ export const handlePpcClick = async (req, res) => {
       });
 
       // Analytics update
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const today = getReportingDateBucket();
       await Analytics.findOneAndUpdate(
         { listingId: id, date: today },
         {
@@ -753,7 +929,6 @@ function getCommonPipelineParts() {
         image: 1,
         views: 1,
         score: 1,
-        rankScore: 1,
         createdAt: 1,
         favorites: 1,
         promotion: 1,
@@ -966,7 +1141,6 @@ export const getTrendingListings = async (req, res) => {
           createdAt: 1,
           favorites: 1,
           promotion: 1,
-          isPromoted: 1,
           status: 1,
           region: 1,
           country: 1,
@@ -1113,7 +1287,7 @@ export const getListingById = async (req, res) => {
         const alreadyViewed = await InteractionLog.findOne(viewQuery).select('_id').lean();
 
         if (!alreadyViewed) {
-          const today = new Date().setHours(0, 0, 0, 0);
+          const today = getReportingDateBucket();
           const creatorId = listing.creatorId?._id || listing.creatorId;
 
           await Promise.all([
@@ -1134,6 +1308,8 @@ export const getListingById = async (req, res) => {
               { upsert: true }
             ),
           ]);
+
+          await recalculateListingScore(actualListingId);
 
           // FIX: View বাড়ার পরে cache invalidate করা (আগে missing ছিল)
           await invalidateListingCaches({
@@ -1256,6 +1432,7 @@ export const toggleFavorite = async (req, res) => {
 
     applyPromotionLogic(listing);
     await listing.save();
+    await recalculateListingScore(listing._id);
     await invalidateListingCaches({
       id: listing._id,
       slug: listing.slug,
@@ -1268,7 +1445,7 @@ export const toggleFavorite = async (req, res) => {
       isFavorited: !isFavorited,
       favoritesCount: listing.favorites.length,
       newLevel: listing.promotion.level,
-      isPromoted: listing.isPromoted,
+      isPromoted: listing.promotion.isPromoted,
     });
   } catch (error) {
     console.error('Favorite Toggle Error:', error);
@@ -1476,7 +1653,7 @@ export const cancelPromotion = async (req, res) => {
     const isBoostStillActive = type === 'boost' ? false : listing.promotion?.boost?.isActive;
 
     if (!isPpcStillActive && !isBoostStillActive) {
-      updateData.isPromoted = false;
+      updateData['promotion.isPromoted'] = false;
     }
 
     await Listing.findByIdAndUpdate(id, { $set: updateData }, { session: dbSession });

@@ -58,3 +58,14 @@ export const authorizeRoles = (...roles) => {
     next();
   };
 };
+
+export const requireActiveAccount = (req, res, next) => {
+  if (req.user?.status !== 'active') {
+    return res.status(403).json({
+      code: 'ACCOUNT_RESTRICTED',
+      accountStatus: req.user?.status,
+      message: 'This account can view content and manage its profile, but business actions are restricted.',
+    });
+  }
+  next();
+};

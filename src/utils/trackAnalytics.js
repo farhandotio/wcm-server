@@ -1,9 +1,9 @@
 import Analytics from '../models/Analytics.js';
+import { getReportingDateBucket } from './reportingTime.js';
 
-export const trackActivity = async (listingId, creatorId, type = 'view') => {
+export const trackActivity = async (listingId, creatorId, type = 'view', occurredAt = new Date()) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); 
+    const today = getReportingDateBucket(occurredAt);
 
     const update = type === 'view' ? { $inc: { views: 1 } } : { $inc: { clicks: 1 } };
 

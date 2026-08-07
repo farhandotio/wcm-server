@@ -62,14 +62,24 @@ const listingSchema = new mongoose.Schema(
       boost: {
         isActive: { type: Boolean, default: false },
         isPaused: { type: Boolean, default: false },
+        pausedAt: { type: Date, default: null },
         amountPaid: { type: Number, default: 0, set: roundToTwo },
         durationDays: { type: Number, default: 0 },
         expiresAt: { type: Date },
+        purchases: [
+          {
+            amountPaid: { type: Number, required: true, set: roundToTwo },
+            durationDays: { type: Number, required: true },
+            startsAt: { type: Date, required: true },
+            expiresAt: { type: Date, required: true },
+            purchasedAt: { type: Date, default: Date.now },
+          },
+        ],
       },
       ppc: {
         isActive: { type: Boolean, default: false },
         ppcBalance: { type: Number, default: 0, set: roundToTwo },
-        costPerClick: { type: Number, default: 0.1, set: roundToTwo },
+        costPerClick: { type: Number, default: 0.3, set: roundToTwo },
         isPaused: { type: Boolean, default: false },
         totalClicks: { type: Number, default: 0 },
         executedClicks: { type: Number, default: 0 },
@@ -97,7 +107,7 @@ listingSchema.index({
 });
 
 listingSchema.index({ continent: 1 });
-listingSchema.index({ isPromoted: 1 });
+listingSchema.index({ 'promotion.isPromoted': 1 });
 listingSchema.index({ status: 1 });
 
 // Pinned position-এর জন্য ইনডেক্স যাতে কুয়েরি ফাস্ট হয়

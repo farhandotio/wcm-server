@@ -6,8 +6,8 @@ export const updateSeoSettings = async (req, res) => {
     try {
         const updatedSetting = await SeoSetting.findOneAndUpdate(
             { pageName },
-            { title, description, keywords },
-            { new: true, upsert: true } // ডাটা না থাকলে তৈরি করবে, থাকলে আপডেট করবে
+            { pageName, title, description, keywords },
+            { returnDocument: 'after', upsert: true, runValidators: true, setDefaultsOnInsert: true }
         );
         res.status(200).json(updatedSetting);
     } catch (error) {

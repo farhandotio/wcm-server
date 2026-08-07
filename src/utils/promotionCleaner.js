@@ -1,5 +1,9 @@
 import cron from 'node-cron';
+import mongoose from 'mongoose';
 import Listing from '../models/Listing.js';
+import User from '../models/User.js';
+import Transaction from '../models/Transaction.js';
+import { calculateAndUpdateScores } from './listingScoreCalculator.js';
 
 const startPromotionCleaner = () => {
   // প্রতিদিন রাত ১২টা (00:00) এ একবার রান করবে
@@ -24,29 +28,69 @@ const startPromotionCleaner = () => {
       });
 
       if (listingsToDisablePpc.length > 0) {
-        const ids = listingsToDisablePpc.map((l) => l._id);
-        await Listing.updateMany(
-          { _id: { $in: ids } },
-          {
-            $set: {
-              'promotion.ppc.isActive': false,
-              'promotion.ppc.ppcBalance': 0,
-              'promotion.ppc.amountPaid': 0,
-              'promotion.ppc.totalClicks': 0,
-              'promotion.ppc.executedClicks': 0,
-            },
+        for (const listing of listingsToDisablePpc) {
+          const dbSession = await mongoose.startSession();
+          try {
+            dbSession.startTransaction();
+            const current = await Listing.findOne({
+              _id: listing._id,
+              'promotion.ppc.isActive': true,
+            }).session(dbSession);
+            if (!current) {
+              await dbSession.abortTransaction();
+              continue;
+            }
+
+            const refundAmount = Number((current.promotion.ppc.ppcBalance || 0).toFixed(2));
+            if (refundAmount > 0) {
+              await User.findByIdAndUpdate(
+                current.creatorId,
+                { $inc: { walletBalance: refundAmount } },
+                { session: dbSession }
+              );
+              await Transaction.create(
+                [
+                  {
+                    creator: current.creatorId,
+                    listing: current._id,
+                    amountPaid: refundAmount,
+                    currency: 'EUR',
+                    fxRate: 1,
+                    amountInEUR: refundAmount,
+                    packageType: 'refund_ppc',
+                    status: 'completed',
+                    invoiceNumber: `REF-PPC-${Date.now()}-${current._id.toString().slice(-4)}`,
+                  },
+                ],
+                { session: dbSession }
+              );
+            }
+
+            current.promotion.ppc.isActive = false;
+            current.promotion.ppc.isPaused = false;
+            current.promotion.ppc.ppcBalance = 0;
+            current.promotion.ppc.amountPaid = 0;
+            current.promotion.ppc.totalClicks = 0;
+            current.promotion.ppc.executedClicks = 0;
+            await current.save({ session: dbSession });
+            await dbSession.commitTransaction();
+          } catch (error) {
+            if (dbSession.inTransaction()) await dbSession.abortTransaction();
+            console.error(`PPC remainder refund failed for ${listing._id}:`, error);
+          } finally {
+            await dbSession.endSession();
           }
-        );
+        }
       }
 
       // ৩. যাদের বুস্ট এবং পিপিছি দুটোই অফ, তাদের isPromoted এবং level রিসেট করা
       await Listing.updateMany(
         {
-          isPromoted: true,
+          'promotion.isPromoted': true,
           'promotion.boost.isActive': false,
           'promotion.ppc.isActive': false,
         },
-        { $set: { isPromoted: false, 'promotion.level': 0 } }
+        { $set: { 'promotion.isPromoted': false, 'promotion.level': 0 } }
       );
 
       // ৪. একটিভ লিস্টিংগুলোর লেভেল রি-ক্যালকুলেশন
@@ -75,7 +119,13 @@ const startPromotionCleaner = () => {
               update: {
                 $set: {
                   'promotion.level': Math.floor(level),
-                  isPromoted: true,
+                  'promotion.isPromoted':
+                    (listing.promotion.boost.isActive &&
+                      !listing.promotion.boost.isPaused &&
+                      new Date(listing.promotion.boost.expiresAt) > now) ||
+                    (listing.promotion.ppc.isActive &&
+                      !listing.promotion.ppc.isPaused &&
+                      listing.promotion.ppc.ppcBalance > 0),
                 },
               },
             },
@@ -84,11 +134,13 @@ const startPromotionCleaner = () => {
         await Listing.bulkWrite(bulkOps);
       }
 
+      await calculateAndUpdateScores();
+
       console.log('Daily Promotion Cleaner Task Completed Successfully.');
     } catch (error) {
       console.error('Cron Cleaner Error:', error);
     }
-  });
+  }, { timezone: 'Europe/Paris' });
 };
 
 export default startPromotionCleaner;

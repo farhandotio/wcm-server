@@ -1,8 +1,6 @@
-import mongoose from 'mongoose';
 import Listing from '../models/Listing.js';
 
-// ── Weight constants ──────────────────────────────────────────
-const W = {
+const WEIGHTS = {
   PINNED: 40,
   PPC: 20,
   BOOST: 15,
@@ -12,131 +10,124 @@ const W = {
   RECENCY: 2,
 };
 
-/**
- * log-normalized score
- * @param {number} value  — actual count
- * @param {number} maxVal — max value across all listings (for normalization)
- * @param {number} maxPts — weight for this dimension
- */
-const logNorm = (value, maxVal, maxPts) => {
-  if (!maxVal || maxVal === 0) return 0;
-  return (Math.log1p(value) / Math.log1p(maxVal)) * maxPts;
+const logNormalizedScore = (value, maximum, points) => {
+  if (!maximum) return 0;
+  return (Math.log1p(value) / Math.log1p(maximum)) * points;
 };
 
-/**
- * Recency score — exponential decay
- * half-life = 7 days → after 7 days listing পায় maxPts/2
- * @param {Date} createdAt
- * @param {number} maxPts
- */
-const recencyScore = (createdAt, maxPts) => {
-  const ageMs = Date.now() - new Date(createdAt).getTime();
-  const ageDays = ageMs / (1000 * 60 * 60 * 24);
-  const halfLifeDays = 7;
-  return maxPts * Math.pow(0.5, ageDays / halfLifeDays);
+const recencyScore = (createdAt, points, now) => {
+  const ageDays = Math.max(0, now - new Date(createdAt).getTime()) / (24 * 60 * 60 * 1000);
+  return points * Math.pow(0.5, ageDays / 7);
 };
 
-/**
- * calculateAndUpdateScores()
- * ─────────────────────────────────────────────────────────────
- * 1. সব approved listing fetch করে
- * 2. normalization-এর জন্য max values বের করে
- * 3. প্রতিটির score ক্যালকুলেট করে
- * 4. bulkWrite দিয়ে DB আপডেট করে
- */
+const getMaxima = (listings) =>
+  listings.reduce(
+    (maxima, listing) => ({
+      maxFavorites: Math.max(maxima.maxFavorites, listing.favorites?.length || 0),
+      maxClicks: Math.max(maxima.maxClicks, listing.promotion?.ppc?.executedClicks || 0),
+      maxViews: Math.max(maxima.maxViews, listing.views || 0),
+    }),
+    { maxFavorites: 0, maxClicks: 0, maxViews: 0 }
+  );
+
+export const calculateCanonicalListingScore = (
+  listing,
+  { maxFavorites = 0, maxClicks = 0, maxViews = 0 } = {},
+  now = Date.now()
+) => {
+  const promotion = listing.promotion || {};
+  const pinnedPosition = promotion.pinnedPosition;
+  const pinnedBonus = pinnedPosition
+    ? WEIGHTS.PINNED * ((5 - pinnedPosition) / 4)
+    : 0;
+  const boostActive =
+    promotion.boost?.isActive === true &&
+    promotion.boost?.isPaused !== true &&
+    new Date(promotion.boost?.expiresAt).getTime() > now;
+  const ppcActive =
+    promotion.ppc?.isActive === true &&
+    promotion.ppc?.isPaused !== true &&
+    Number(promotion.ppc?.ppcBalance || 0) > 0;
+
+  const score =
+    pinnedBonus +
+    (ppcActive ? WEIGHTS.PPC : 0) +
+    (boostActive ? WEIGHTS.BOOST : 0) +
+    logNormalizedScore(listing.favorites?.length || 0, maxFavorites, WEIGHTS.FAVORITES) +
+    logNormalizedScore(
+      promotion.ppc?.executedClicks || 0,
+      maxClicks,
+      WEIGHTS.CLICKS
+    ) +
+    logNormalizedScore(listing.views || 0, maxViews, WEIGHTS.VIEWS) +
+    recencyScore(listing.createdAt, WEIGHTS.RECENCY, now);
+
+  return Number(score.toFixed(4));
+};
+
+const getApprovedScoreInputs = () =>
+  Listing.find(
+    { status: 'approved' },
+    { _id: 1, createdAt: 1, favorites: 1, views: 1, promotion: 1 }
+  ).lean();
+
+export const recalculateListingScore = async (listingId) => {
+  const listings = await getApprovedScoreInputs();
+  const target = listings.find((listing) => listing._id.toString() === listingId.toString());
+
+  if (!target) {
+    await Listing.updateOne({ _id: listingId }, { $set: { score: 0 } });
+    return 0;
+  }
+
+  const maxima = getMaxima(listings);
+  const calculationTime = Date.now();
+  const scoredListings = listings.map((listing) => ({
+    id: listing._id,
+    score: calculateCanonicalListingScore(listing, maxima, calculationTime),
+  }));
+
+  await Listing.bulkWrite(
+    scoredListings.map(({ id, score }) => ({
+      updateOne: { filter: { _id: id }, update: { $set: { score } } },
+    })),
+    { ordered: false }
+  );
+
+  return scoredListings.find(({ id }) => id.toString() === listingId.toString()).score;
+};
+
 export const calculateAndUpdateScores = async () => {
   const startTime = Date.now();
   console.log('[ScoreCalc] Starting listing score calculation...');
 
   try {
-    // ── Step 1: Fetch all approved listings (শুধু score-relevant fields) ──
-    const listings = await Listing.find(
-      { status: 'approved' },
-      {
-        _id: 1,
-        createdAt: 1,
-        favorites: 1,
-        views: 1,
-        promotion: 1,
-      }
-    ).lean();
-
+    const listings = await getApprovedScoreInputs();
     if (!listings.length) {
       console.log('[ScoreCalc] No approved listings found. Skipping.');
-      return;
+      return { matchedCount: 0, modifiedCount: 0 };
     }
 
-    // ── Step 2: Max values for normalization ──────────────────
-    let maxFavorites = 0;
-    let maxClicks = 0;
-    let maxViews = 0;
-
-    for (const l of listings) {
-      const fav = Array.isArray(l.favorites) ? l.favorites.length : 0;
-      const clicks = l.promotion?.ppc?.totalClicks ?? 0;
-      const views = l.views ?? 0;
-
-      if (fav > maxFavorites) maxFavorites = fav;
-      if (clicks > maxClicks) maxClicks = clicks;
-      if (views > maxViews) maxViews = views;
-    }
-
-    // ── Step 3: Score each listing & build bulkWrite ops ──────
-    const bulkOps = listings.map((l) => {
-      const prom = l.promotion ?? {};
-
-      // Pinned bonus — যে position যত ছোট, bonus তত বেশি
-      const pinnedPos = prom.pinnedPosition; // 1, 2, 3, 4 বা null
-      const pinnedBonus = pinnedPos
-        ? W.PINNED * ((5 - pinnedPos) / 4) // pos 1 → 40, pos 4 → 10
-        : 0;
-
-      // PPC bonus
-      const ppcActive = prom.ppc?.isActive === true && prom.ppc?.isPaused !== true;
-      const ppcBonus = ppcActive ? W.PPC : 0;
-
-      // Boost bonus
-      const boostActive = prom.boost?.isActive === true && prom.boost?.isPaused !== true;
-      const boostBonus = boostActive ? W.BOOST : 0;
-
-      // Favorites
-      const favCount = Array.isArray(l.favorites) ? l.favorites.length : 0;
-      const favScore = logNorm(favCount, maxFavorites, W.FAVORITES);
-
-      // PPC clicks
-      const clicks = prom.ppc?.totalClicks ?? 0;
-      const clickScore = logNorm(clicks, maxClicks, W.CLICKS);
-
-      // Views
-      const views = l.views ?? 0;
-      const viewScore = logNorm(views, maxViews, W.VIEWS);
-
-      // Recency
-      const recency = recencyScore(l.createdAt, W.RECENCY);
-
-      // Final score (rounded to 4 decimal places)
-      const score = parseFloat(
-        (pinnedBonus + ppcBonus + boostBonus + favScore + clickScore + viewScore + recency).toFixed(
-          4
-        )
-      );
-
-      return {
-        updateOne: {
-          filter: { _id: l._id },
-          update: { $set: { score } },
+    const maxima = getMaxima(listings);
+    const calculationTime = Date.now();
+    const operations = listings.map((listing) => ({
+      updateOne: {
+        filter: { _id: listing._id },
+        update: {
+          $set: {
+            score: calculateCanonicalListingScore(listing, maxima, calculationTime),
+          },
         },
-      };
-    });
-
-    // ── Step 4: Bulk update ───────────────────────────────────
-    const result = await Listing.bulkWrite(bulkOps, { ordered: false });
-
+      },
+    }));
+    const result = await Listing.bulkWrite(operations, { ordered: false });
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(
       `[ScoreCalc] Done. Updated ${result.modifiedCount}/${listings.length} listings in ${elapsed}s`
     );
-  } catch (err) {
-    console.error('[ScoreCalc] Error during score calculation:', err);
+    return result;
+  } catch (error) {
+    console.error('[ScoreCalc] Error during score calculation:', error);
+    throw error;
   }
 };

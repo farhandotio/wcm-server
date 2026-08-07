@@ -205,10 +205,10 @@ export const becomeCreator = async (req, res) => {
     }
 
     // ২. VAT Validation Logic (যদি বিজনেস হয় এবং ভ্যাট নাম্বার থাকে)
-    let isVatValid = false;
+    let vatVerification = { status: 'not_applicable', isValid: false };
     if (customerType === 'business' && vatNumber) {
       // VIES API বা অন্য কোনো ভ্যালিডেটর কল করুন
-      isVatValid = await validateVatWithVIES(vatNumber);
+      vatVerification = await validateVatWithVIES(vatNumber);
     }
 
     // ৩. ডাটাবেস আপডেট
@@ -225,8 +225,12 @@ export const becomeCreator = async (req, res) => {
           'profile.city': city,
           'profile.customerType': customerType || 'individual',
           'profile.vatNumber': vatNumber || '',
-          'profile.isVatValid': isVatValid,
-          'profile.vatLastChecked': isVatValid ? new Date() : null,
+          'profile.isVatValid': vatVerification.isValid,
+          'profile.vatVerificationStatus': vatVerification.status,
+          'profile.vatLastChecked':
+            vatVerification.status === 'valid' || vatVerification.status === 'invalid'
+              ? new Date()
+              : null,
           'profile.language': language,
           'profile.websiteLink': websiteLink,
           'profile.socialLink': socialLink,
@@ -536,6 +540,8 @@ export const getFamousCreators = async (req, res) => {
           lastName: 1,
           username: 1,
           profile: 1,
+          createdAt: 1,
+          updatedAt: 1,
 
           totalListings: {
             $size: {

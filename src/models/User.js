@@ -77,6 +77,11 @@ const userSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       }, // VIES validation result
+      vatVerificationStatus: {
+        type: String,
+        enum: ['not_applicable', 'valid', 'invalid', 'verification_pending'],
+        default: 'not_applicable',
+      },
       vatLastChecked: {
         type: Date,
       },

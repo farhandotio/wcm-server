@@ -6,7 +6,18 @@ const seoSettingSchema = new mongoose.Schema({
         required: true,
         unique: true,
         // এখানে 'faq' যোগ করা হয়েছে
-        enum: ['home', 'about', 'contact', 'explore', 'blog', 'faq', 'creators','how-it-works']
+        enum: [
+            'home',
+            'about',
+            'contact',
+            'explore',
+            'blog',
+            'faq',
+            'creators',
+            'terms',
+            'privacy',
+            'how-it-works'
+        ]
     },
     title: { type: String, required: true },
     description: { type: String, required: true },

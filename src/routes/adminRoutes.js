@@ -4,6 +4,7 @@ import {
   getCreatorRequests,
   approveCreator,
   rejectCreator,
+  reviewCreatorVat,
   toggleUserStatus,
   manageListings,
   updateListingStatus,
@@ -94,6 +95,7 @@ router.get('/export-users', exportUsersExcel);
 router.get('/creator-requests', getCreatorRequests);
 router.put('/approve-creator/:userId', approveCreator);
 router.put('/reject-creator/:userId', rejectCreator);
+router.put('/creator-requests/:userId/vat-review', reviewCreatorVat);
 router.put('/toggle-status/:userId', toggleUserStatus);
 router.put('/update-ppc-balance/:id', updatePpcBalanceManual);
 

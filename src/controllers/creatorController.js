@@ -2,6 +2,12 @@ import Listing from '../models/Listing.js';
 import Transaction from '../models/Transaction.js';
 import User from '../models/User.js';
 import Analytics from '../models/Analytics.js';
+import {
+  getRecentReportingDateKeys,
+  getReportingDateKey,
+  getReportingWeekday,
+  REPORTING_TIME_ZONE,
+} from '../utils/reportingTime.js';
 
 export const getMyTransactions = async (req, res) => {
   try {
@@ -63,7 +69,7 @@ export const getPromotionAnalytics = async (req, res) => {
 
     // promotion.boost.amountPaid এবং durationDays অবশ্যই সিলেক্ট করতে হবে
     const listing = await Listing.findOne({ _id: id, creatorId: userId })
-      .select('title promotion views isPromoted image')
+      .select('title promotion views image')
       .lean();
 
     if (!listing) return res.status(404).json({ success: false, message: 'Listing not found' });
@@ -110,7 +116,7 @@ export const getPromotionAnalytics = async (req, res) => {
           isActive: ppcIsActive,
           isPaused: !!ppc.isPaused,
           balance: Number(ppc.ppcBalance || 0).toFixed(2),
-          costPerClick: Number(ppc.costPerClick || 0.1).toFixed(2),
+          costPerClick: Number(ppc.costPerClick || 0.3).toFixed(2),
           totalPurchased,
           clicksUsed: executed,
           clicksRemaining: remaining,
@@ -152,15 +158,13 @@ export const getCreatorDashboardStats = async (req, res) => {
       return res.status(200).json({
         success: true,
         ...user.dashboardStats.data,
+        reportingTimeZone: REPORTING_TIME_ZONE,
         walletBalance: user.walletBalance.toFixed(2),
         isCached: true,
         lastUpdated: lastUpdate,
       });
     }
 
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setHours(0, 0, 0, 0);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
     const [listings, transactions, allAnalytics] = await Promise.all([
@@ -188,26 +192,19 @@ export const getCreatorDashboardStats = async (req, res) => {
     const lifetimeClicks = allAnalytics.reduce((acc, curr) => acc + (curr.clicks || 0), 0);
 
     // ৩. চার্ট ডেটা জেনারেশন (Fix: Date matching logic)
-    const chartData = [];
-    for (let i = 0; i < 7; i++) {
-      const targetDate = new Date(sevenDaysAgo);
-      targetDate.setDate(targetDate.getDate() + i);
-
-      // লোকাল ডেট স্ট্রিং (YYYY-MM-DD) বের করা যা ডাটাবেসের ডেটের সাথে মিলবে
-      const dStr = targetDate.toLocaleDateString('en-CA'); // Outputs YYYY-MM-DD accurately
-
+    const chartData = getRecentReportingDateKeys(7, now).map((dStr) => {
       const dayData = allAnalytics.filter((a) => {
-        const aDate = new Date(a.date).toLocaleDateString('en-CA');
+        const aDate = getReportingDateKey(a.date);
         return aDate === dStr;
       });
 
-      chartData.push({
-        name: targetDate.toLocaleDateString('en-US', { weekday: 'short' }),
-        fullDate: dStr, // Debugging এর জন্য
+      return {
+        name: getReportingWeekday(dStr),
+        fullDate: dStr,
         views: dayData.reduce((sum, d) => sum + (d.views || 0), 0),
         clicks: dayData.reduce((sum, d) => sum + (d.clicks || 0), 0),
-      });
-    }
+      };
+    });
 
     const stats = {
       totalViews: lifetimeViews,
@@ -238,6 +235,7 @@ export const getCreatorDashboardStats = async (req, res) => {
       success: true,
       stats,
       chartData,
+      reportingTimeZone: REPORTING_TIME_ZONE,
       walletBalance: user.walletBalance.toFixed(2),
       isCached: false,
       lastUpdated: now,

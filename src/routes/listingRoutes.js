@@ -11,14 +11,19 @@ import {
   getListingById,
   getCreatorListingCount,
   handlePpcClick,
-  cancelPromotion,
   getMyFavorites,
   getModerationReasons,
   getCuratedCollections,
   getTrendingListings,
 } from '../controllers/listingController.js';
+import { cancelPromotion } from '../controllers/PaymentController.js';
 import { getTagsByCategory } from '../controllers/adminController.js';
-import { authMiddleware, authorizeRoles, optionalAuth } from '../middlewares/auth.js';
+import {
+  authMiddleware,
+  authorizeRoles,
+  optionalAuth,
+  requireActiveAccount,
+} from '../middlewares/auth.js';
 
 const router = express.Router();
 
@@ -46,7 +51,7 @@ router.get('/tags/by-category/:categoryId', getTagsByCategory);
 // --- Favorite Routes ---
 // ──────────────────────────────────────────────────────────────────
 router.get('/favorites', authMiddleware, getMyFavorites);
-router.post('/favorite/:id', authMiddleware, toggleFavorite);
+router.post('/favorite/:id', authMiddleware, requireActiveAccount, toggleFavorite);
 
 // ──────────────────────────────────────────────────────────────────
 // --- Engagement Routes ---
@@ -62,6 +67,7 @@ router.get('/my-listings', authMiddleware, authorizeRoles('creator'), getMyListi
 router.post(
   '/add',
   authMiddleware,
+  requireActiveAccount,
   authorizeRoles('creator'),
   upload.single('image'),
   createListing
@@ -70,17 +76,24 @@ router.post(
 router.put(
   '/update/:id',
   authMiddleware,
+  requireActiveAccount,
   authorizeRoles('creator'),
   upload.single('image'),
   updateListing
 );
 
-router.delete('/delete/:id', authMiddleware, authorizeRoles('creator'), deleteListing);
+router.delete(
+  '/delete/:id',
+  authMiddleware,
+  requireActiveAccount,
+  authorizeRoles('creator'),
+  deleteListing
+);
 
 // ──────────────────────────────────────────────────────────────────
 // --- Individual Listing Routes ---
 // ──────────────────────────────────────────────────────────────────
 router.get('/:id', optionalAuth, getListingById);
-router.patch('/:id/cancel-promotion', authMiddleware, cancelPromotion);
+router.patch('/:id/cancel-promotion', authMiddleware, requireActiveAccount, cancelPromotion);
 
 export default router;
