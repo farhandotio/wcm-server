@@ -47,6 +47,7 @@ const seoSchema = new mongoose.Schema(
 const metadataSchema = new mongoose.Schema(
   {
     provider: { type: String, trim: true, default: null },
+    model: { type: String, trim: true, default: null },
     confidence: { type: Number, min: 0, max: 1, default: null },
     sourceVersion: { type: Number, min: 1, default: 1 },
     sourceHash: { type: String, trim: true, default: null },
@@ -54,6 +55,7 @@ const metadataSchema = new mongoose.Schema(
     reviewer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     reviewerRole: { type: String, enum: ['admin', 'creator', null], default: null },
     promptVersion: { type: String, trim: true, default: null },
+    memoryHit: { type: Boolean, default: false },
     origin: {
       type: String,
       enum: ['ai', 'creator', 'administrator', 'migration'],
@@ -120,6 +122,7 @@ const translationRecordSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    versionNumber: { type: Number, min: 1, default: 1, required: true },
     metadata: {
       type: metadataSchema,
       required: true,

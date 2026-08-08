@@ -8,7 +8,7 @@
     "test": "node --test",
     "start": "node server.js",
     "dev": "npx nodemon server.js",
-    "build": "mkdir -p uploads/listings && npm install"
+    "build": "node -e \"require('fs').mkdirSync('uploads/listings',{recursive:true})\" && npm install"
   },
   "keywords": [],
   "author": "",
