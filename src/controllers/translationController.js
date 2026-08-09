@@ -12,6 +12,17 @@ import {
   markTranslationNotificationRead,
   updateTranslationNotificationPreferences,
 } from '../services/translation/translationNotificationService.js';
+import {
+  buildLocalizedMetadata,
+  changeLocalizedSlug,
+  resolveLocalizedSlug,
+  resolveSlugRedirect,
+} from '../services/translation/localizedUrlService.js';
+import {
+  assertCreatorOwnsBusinessObject,
+  assertCreatorTranslationMutationAllowed,
+} from '../services/translation/creatorTranslationService.js';
+import TranslationRecord from '../models/TranslationRecord.js';
 
 const sendError = (res, error) => {
   const statusByCode = {
@@ -22,6 +33,15 @@ const sendError = (res, error) => {
     TRANSLATION_REGENERATION_LIMIT_REACHED: 429,
     STALE_TRANSLATION_JOB: 409,
     TRANSLATION_VALIDATION_FAILED: 400,
+    UNSUPPORTED_BUSINESS_OBJECT: 400,
+    UNSUPPORTED_LANGUAGE: 400,
+    LOCALIZED_SLUG_UNSUPPORTED: 400,
+    INVALID_LOCALIZED_SLUG: 400,
+    LOCALIZED_SLUG_CONFLICT: 409,
+    LOCALIZED_SLUG_PERMANENTLY_RESERVED: 409,
+    TRANSLATION_VERSION_CONFLICT: 409,
+    TRANSLATION_NOT_PUBLISHED: 409,
+    SOURCE_SLUG_MANAGED_BY_OBJECT: 409,
   };
   const status = statusByCode[error.code] || 400;
 
@@ -30,6 +50,96 @@ const sendError = (res, error) => {
     code: error.code,
     message: error.message,
   });
+};
+
+export const resolveLocalizedUrl = async (req, res) => {
+  try {
+    const request = {
+      businessObjectType: req.params.businessObjectType,
+      languageCode: req.params.languageCode,
+      slug: req.params.slug,
+    };
+    const redirect = await resolveSlugRedirect(request);
+    if (redirect) {
+      return res.json({ success: true, data: { type: 'redirect', ...redirect } });
+    }
+
+    const resolved = await resolveLocalizedSlug(request);
+    if (!resolved) {
+      return res.status(404).json({ success: false, message: 'Localized URL not found' });
+    }
+    const metadata = await buildLocalizedMetadata({
+      businessObjectType: resolved.businessObjectType,
+      businessObjectId: resolved.businessObjectId,
+      languageCode: resolved.languageCode,
+      baseUrl: process.env.CLIENT_URL || process.env.FRONTEND_URL,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        type: 'business_object',
+        businessObjectType: resolved.businessObjectType,
+        businessObjectId: resolved.businessObjectId,
+        languageCode: resolved.languageCode,
+        slug: resolved.slug,
+        fallback: resolved.fallback,
+        translation: resolved.translation,
+        metadata,
+      },
+    });
+  } catch (error) {
+    return sendError(res, error);
+  }
+};
+
+export const changeCreatorLocalizedSlug = async (req, res) => {
+  try {
+    assertCreatorTranslationMutationAllowed(req.user.status);
+    await assertCreatorOwnsBusinessObject({
+      businessObjectType: req.params.businessObjectType,
+      businessObjectId: req.params.businessObjectId,
+      creatorId: req.user._id,
+    });
+    const record = await TranslationRecord.findOne({
+      businessObjectType: req.params.businessObjectType,
+      businessObjectId: req.params.businessObjectId,
+      languageCode: req.body.languageCode,
+    }).select('_id');
+    if (!record) {
+      const error = new Error('Translation record not found');
+      error.code = 'TRANSLATION_NOT_FOUND';
+      throw error;
+    }
+
+    const data = await changeLocalizedSlug({
+      translationRecordId: record._id,
+      slug: req.body.slug,
+      expectedVersion: req.body.expectedVersion,
+      actor: req.user._id,
+      actorRole: 'creator',
+      statusCode: req.body.statusCode,
+    });
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error);
+  }
+};
+
+export const changeAdminLocalizedSlug = async (req, res) => {
+  try {
+    const data = await changeLocalizedSlug({
+      translationRecordId: req.params.translationRecordId,
+      slug: req.body.slug,
+      expectedVersion: req.body.expectedVersion,
+      actor: req.user._id,
+      actorRole: 'admin',
+      statusCode: req.body.statusCode,
+    });
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error);
+  }
 };
 
 export const getCreatorTranslationWorkspace = async (req, res) => {

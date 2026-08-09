@@ -121,7 +121,6 @@ export const updateBlog = async (req, res) => {
     if (req.body.title !== undefined) {
       if (!req.body.title?.trim()) return res.status(400).json({ message: 'Title is required' });
       updateData.title = req.body.title;
-      updateData.slug = await createUniqueSlug(req.body.title, blog._id);
     }
 
     if (req.body.category !== undefined) {

@@ -1,6 +1,8 @@
 import express from 'express';
 import {
   acceptCreatorTranslationProposal,
+  changeAdminLocalizedSlug,
+  changeCreatorLocalizedSlug,
   discardCreatorTranslationProposal,
   getCreatorTranslationAvailability,
   getCreatorTranslationNotifications,
@@ -8,6 +10,7 @@ import {
   getCreatorTranslationWorkspace,
   markCreatorTranslationNotificationRead,
   requestCreatorTranslationRegeneration,
+  resolveLocalizedUrl,
   saveCreatorTranslationImprovement,
   updateCreatorTranslationNotificationPreferences,
 } from '../controllers/translationController.js';
@@ -27,6 +30,8 @@ import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
 const router = express.Router();
 
+router.get('/url/:languageCode/:businessObjectType/:slug', resolveLocalizedUrl);
+
 router.use(authMiddleware);
 
 router.use('/creator', authorizeRoles('creator'));
@@ -44,6 +49,10 @@ router.get(
 router.put(
   '/creator/:businessObjectType/:businessObjectId/improvement',
   saveCreatorTranslationImprovement
+);
+router.patch(
+  '/creator/:businessObjectType/:businessObjectId/slug',
+  changeCreatorLocalizedSlug
 );
 router.post(
   '/creator/:businessObjectType/:businessObjectId/regenerations',
@@ -67,5 +76,6 @@ router.patch('/admin/records/:translationRecordId/verify', verifyTranslation);
 router.post('/admin/records/:translationRecordId/rollback', rollbackTranslation);
 router.patch('/admin/records/:translationRecordId/unpublish', unpublishTranslation);
 router.patch('/admin/records/:translationRecordId/archive', archiveTranslation);
+router.patch('/admin/records/:translationRecordId/slug', changeAdminLocalizedSlug);
 
 export default router;
