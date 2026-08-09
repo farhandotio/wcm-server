@@ -51,3 +51,33 @@ test('Listing approval publishes ready translations through the approval-gated w
   assert.match(workflow, /translationStatus: \{ \$ne: 'failed' \}/);
   assert.match(workflow, /expectedVersion: record\.versionNumber/);
 });
+
+test('Creator Profile controller queues application and source update translations', () => {
+  const source = readController('userController.js');
+
+  assert.match(source, /businessObjectType: 'creatorProfile'/);
+  assert.match(source, /name: user\.profile\?\.displayName \|\| user\.profile\?\.businessName/);
+  assert.match(source, /bio: user\.profile\?\.bio/);
+  assert.match(source, /sourceSlug: user\.slug/);
+  assert.match(source, /await triggerCreatorProfileTranslations\(updatedUser, req\.user\._id\)/);
+  assert.match(source, /displayName !== undefined \|\| bio !== undefined/);
+  assert.match(source, /markObjectTranslationsOutdated/);
+});
+
+test('Creator approval publishes ready profile translations through the approval gate', () => {
+  const source = readController('adminController.js');
+
+  assert.match(source, /businessObjectType: 'creatorProfile'/);
+  assert.match(source, /creatorRequestStatus: user\.creatorRequest\.status/);
+  assert.match(source, /recipient: user\._id/);
+});
+
+test('Category controller queues manual-review translations on create and title update', () => {
+  const source = readController('adminController.js');
+
+  assert.match(source, /businessObjectType: 'category'/);
+  assert.match(source, /sourceContent: \{ title: category\.title \}/);
+  assert.match(source, /await triggerCategoryTranslations\(category, req\.user\._id\)/);
+  assert.match(source, /triggerCategoryTranslations\(updatedCategory, req\.user\._id, \{ sourceChanged: true \}\)/);
+  assert.match(source, /markObjectTranslationsOutdated/);
+});

@@ -26,12 +26,6 @@ export const DEFAULT_PUBLISHING_POLICIES = Object.freeze({
     creatorImprovementMode: 'manual_review',
     verifiedAdminOnly: true,
   }),
-  [BUSINESS_OBJECT_TYPES.COLLECTION]: Object.freeze({
-    publicationMode: 'manual_review',
-    requiredMasterStatus: null,
-    creatorImprovementMode: 'manual_review',
-    verifiedAdminOnly: true,
-  }),
   [BUSINESS_OBJECT_TYPES.BLOG]: Object.freeze({
     publicationMode: 'manual_review',
     requiredMasterStatus: null,

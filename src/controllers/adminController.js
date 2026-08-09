@@ -23,6 +23,36 @@ import { backupDB } from '../utils/dbBackup.js';
 import { restoreDB } from '../utils/dbRestore.js';
 import { recalculateListingScore } from '../utils/listingScoreCalculator.js';
 import { applyAutomaticPublicationForObject } from '../services/translation/publishingWorkflowService.js';
+import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import {
+  markObjectTranslationsOutdated,
+  requestBulkTranslations,
+} from '../services/translation/translationEngine.js';
+
+const triggerCategoryTranslations = async (category, adminId, { sourceChanged = false } = {}) => {
+  const sourceVersion = category.updatedAt.getTime();
+
+  if (sourceChanged) {
+    await markObjectTranslationsOutdated({
+      businessObjectType: 'category',
+      businessObjectId: category._id,
+      sourceVersion,
+    });
+  }
+
+  return requestBulkTranslations(
+    getEnabledLanguages()
+      .filter(({ isSource }) => !isSource)
+      .map(({ code }) => ({
+        businessObjectType: 'category',
+        businessObjectId: category._id,
+        targetLanguageCode: code,
+        sourceVersion,
+        sourceContent: { title: category.title },
+        context: { requestedBy: adminId, requestedByRole: 'admin' },
+      }))
+  );
+};
 
 
 // Get Regions by Category
@@ -508,6 +538,7 @@ export const createCategory = async (req, res) => {
       order: count,
     });
     await invalidateMetaCaches();
+    await triggerCategoryTranslations(category, req.user._id);
     res.status(201).json(category);
   } catch (error) {
     if (error.code === 11000) {
@@ -528,6 +559,9 @@ export const updateCategory = async (req, res) => {
     );
     if (!updatedCategory) return res.status(404).json({ message: 'Category not found' });
     await invalidateMetaCaches();
+    if (title !== undefined) {
+      await triggerCategoryTranslations(updatedCategory, req.user._id, { sourceChanged: true });
+    }
     res.status(200).json(updatedCategory);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -756,6 +790,16 @@ export const approveCreator = async (req, res) => {
       id: user._id,
       username: user.username,
       slug: user.slug,
+    });
+    await applyAutomaticPublicationForObject({
+      businessObjectType: 'creatorProfile',
+      businessObjectId: user._id,
+      masterState: {
+        status: user.status,
+        role: user.role,
+        creatorRequestStatus: user.creatorRequest.status,
+      },
+      recipient: user._id,
     });
     res.status(200).json({ message: 'User is now a Creator', user });
   } catch (error) {

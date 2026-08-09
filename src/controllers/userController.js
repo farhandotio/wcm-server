@@ -17,8 +17,49 @@ import {
 } from '../utils/cache.js';
 import dns from 'dns/promises';
 import { Resend } from 'resend';
+import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import {
+  markObjectTranslationsOutdated,
+  requestBulkTranslations,
+} from '../services/translation/translationEngine.js';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+const triggerCreatorProfileTranslations = async (
+  user,
+  creatorId,
+  { sourceChanged = false } = {}
+) => {
+  const sourceVersion = user.updatedAt.getTime();
+
+  if (sourceChanged) {
+    await markObjectTranslationsOutdated({
+      businessObjectType: 'creatorProfile',
+      businessObjectId: user._id,
+      sourceVersion,
+    });
+  }
+
+  return requestBulkTranslations(
+    getEnabledLanguages()
+      .filter(({ isSource }) => !isSource)
+      .map(({ code }) => ({
+        businessObjectType: 'creatorProfile',
+        businessObjectId: user._id,
+        targetLanguageCode: code,
+        sourceVersion,
+        sourceContent: {
+          name: user.profile?.displayName || user.profile?.businessName,
+          bio: user.profile?.bio,
+        },
+        context: {
+          requestedBy: creatorId,
+          requestedByRole: 'creator',
+          sourceSlug: user.slug,
+        },
+      }))
+  );
+};
 
 export const registerUser = async (req, res) => {
   try {
@@ -253,6 +294,8 @@ export const becomeCreator = async (req, res) => {
       slug: updatedUser.slug,
     });
 
+    await triggerCreatorProfileTranslations(updatedUser, req.user._id);
+
     res.status(200).json({
       message: 'Creator application submitted successfully for review.',
       user: updatedUser,
@@ -383,6 +426,10 @@ export const updateCreatorProfile = async (req, res) => {
       username: user.username,
       slug: user.slug,
     });
+
+    if (displayName !== undefined || bio !== undefined) {
+      await triggerCreatorProfileTranslations(user, req.user._id, { sourceChanged: true });
+    }
 
     res.status(200).json({ message: 'Creator profile updated', user });
   } catch (error) {

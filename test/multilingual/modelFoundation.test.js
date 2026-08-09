@@ -136,10 +136,11 @@ test('TranslationVersion accepts append-only snapshots and audit requires a huma
   await assert.rejects(invalidAudit.validate(), /actor is required for creator events/);
 });
 
-test('Collection master stores structure but no translated content fields', () => {
+test('Collection remains a separate non-multilingual feature', () => {
   assert.equal(Collection.schema.path('key') != null, true);
   assert.equal(Collection.schema.path('listingIds') != null, true);
   assert.equal(Collection.schema.path('name'), undefined);
   assert.equal(Collection.schema.path('description'), undefined);
   assert.equal(Collection.schema.path('slug'), undefined);
+  assert.equal(BUSINESS_OBJECT_REGISTRY.collection, undefined);
 });
