@@ -3,6 +3,7 @@ import {
   markObjectTranslationsOutdated,
   requestBulkTranslations,
 } from './translationEngine.js';
+import { getCmsPageDefinition } from '../../config/businessObjectRegistry.js';
 
 const CMS_FIXED_FIELDS = new Set([
   '_id',
@@ -51,6 +52,12 @@ export const triggerCmsTranslations = async ({
   adminId = null,
   sourceChanged = false,
 }) => {
+  if (!getCmsPageDefinition(cmsKey)) {
+    const error = new Error(`Unsupported CMS page: ${cmsKey}`);
+    error.code = 'UNSUPPORTED_CMS_PAGE';
+    throw error;
+  }
+
   const sourceVersion = document.updatedAt.getTime();
 
   if (sourceChanged) {

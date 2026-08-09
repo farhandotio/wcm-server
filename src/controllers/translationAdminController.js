@@ -13,6 +13,11 @@ import {
   restoreTranslationVersion,
   setTranslationVerified,
 } from '../services/translation/translationReviewService.js';
+import {
+  getTranslationDashboard as getDashboard,
+  getTranslationRecordDetails as getDetails,
+  searchTranslationRecords as searchRecords,
+} from '../services/translation/translationCentreService.js';
 
 const sendError = (res, error) =>
   res.status(error.code === 'TRANSLATION_NOT_FOUND' ? 404 : 400).json({
@@ -154,4 +159,16 @@ export const archiveTranslation = async (req, res) => {
   } catch (error) {
     sendError(res, error);
   }
+};
+
+export const getTranslationDashboard = async (_req, res) => {
+  try { res.json({ success: true, data: await getDashboard() }); } catch (error) { sendError(res, error); }
+};
+
+export const searchTranslationRecords = async (req, res) => {
+  try { res.json({ success: true, data: await searchRecords(req.query) }); } catch (error) { sendError(res, error); }
+};
+
+export const getTranslationRecordDetails = async (req, res) => {
+  try { res.json({ success: true, data: await getDetails(req.params.translationRecordId) }); } catch (error) { sendError(res, error); }
 };

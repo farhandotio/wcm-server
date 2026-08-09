@@ -62,17 +62,17 @@ export const BUSINESS_OBJECT_REGISTRY = Object.freeze({
     ownerPath: null,
   }),
   [BUSINESS_OBJECT_TYPES.CMS]: defineObject({
-    modelNames: ['AboutPage', 'Footer', 'HowItWork', 'CmsPage'],
+    modelNames: ['AboutPage', 'Footer', 'HowItWork'],
     translatableFields: ['title', 'name', 'description', 'content'],
     fixedFields: ['href', 'styleSettings', 'image', 'images', 'order', 'rawHtml'],
     fieldAliases: {},
     supportsLocalizedSlug: true,
     ownerPath: null,
-    allowedPageKeys: Object.freeze([
-      'about',
-      'footer',
-      'how-it-works',
-    ]),
+    cmsPages: Object.freeze({
+      about: Object.freeze({ modelName: 'AboutPage', label: 'About' }),
+      footer: Object.freeze({ modelName: 'Footer', label: 'Footer' }),
+      'how-it-works': Object.freeze({ modelName: 'HowItWork', label: 'How It Works' }),
+    }),
   }),
 });
 
@@ -81,6 +81,9 @@ export const getBusinessObjectDefinition = (businessObjectType) =>
 
 export const isSupportedBusinessObjectType = (businessObjectType) =>
   Boolean(getBusinessObjectDefinition(businessObjectType));
+
+export const getCmsPageDefinition = (cmsKey) =>
+  BUSINESS_OBJECT_REGISTRY[BUSINESS_OBJECT_TYPES.CMS].cmsPages[cmsKey] || null;
 
 export const validateTranslatableContent = (businessObjectType, content) => {
   const definition = getBusinessObjectDefinition(businessObjectType);

@@ -25,6 +25,9 @@ import {
   rollbackTranslation,
   unpublishTranslation,
   verifyTranslation,
+  getTranslationDashboard,
+  searchTranslationRecords,
+  getTranslationRecordDetails,
 } from '../controllers/translationAdminController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 
@@ -66,6 +69,9 @@ router.get(
 );
 
 router.use('/admin', authorizeRoles('admin'));
+router.get('/admin/dashboard', getTranslationDashboard);
+router.get('/admin/records', searchTranslationRecords);
+router.get('/admin/records/:translationRecordId', getTranslationRecordDetails);
 router.get('/admin/publishing-policies', getPublishingPolicies);
 router.post('/admin/publishing-policies', createPublishingPolicy);
 router.post('/admin/publishing-policies/:policyId/activate', activatePublishingPolicy);

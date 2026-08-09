@@ -3,7 +3,6 @@ import OpenAI from 'openai';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 
 let client;
-let lastUsage = null;
 
 const getClient = () => {
   if (!process.env.OPENAI_API_KEY) {
@@ -37,12 +36,11 @@ const translate = async ({ system, user, signal }) => {
     throw error;
   }
 
-  lastUsage = response.usage || null;
-
   return {
     content: JSON.parse(output),
     model: response.model,
     confidence: null,
+    usage: response.usage || null,
   };
 };
 
@@ -53,7 +51,7 @@ export const openaiTranslationProvider = Object.freeze({
     valid: Boolean(process.env.OPENAI_API_KEY),
     errors: process.env.OPENAI_API_KEY ? [] : ['OPENAI_API_KEY is required'],
   }),
-  getUsage: () => lastUsage,
+  getUsage: () => null,
   estimateCost: () => null,
 });
 

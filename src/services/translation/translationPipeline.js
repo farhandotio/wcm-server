@@ -15,6 +15,7 @@ import {
 import { createTranslationHash } from './translationNormalization.js';
 import { createTranslationProposal } from './translationProposalService.js';
 import { queueTranslationNotification } from './translationNotificationService.js';
+import TranslationUsageEvent from '../../models/TranslationUsageEvent.js';
 
 const callProviderWithTimeout = async (provider, payload, timeoutMs) => {
   const abortController = new AbortController();
@@ -72,6 +73,10 @@ export const processTranslationJob = async (
     failJob = failTranslationJob,
     createProposal = createTranslationProposal,
     notify = queueTranslationNotification,
+    // Unit callers can process a job without a Mongo connection; production persistence
+    // happens whenever the model connection is ready.
+    recordUsage = (event) =>
+      TranslationUsageEvent.db.readyState === 1 ? TranslationUsageEvent.create(event) : null,
   } = {}
 ) => {
   try {
@@ -85,6 +90,8 @@ export const processTranslationJob = async (
     let providerMetadata = { provider: 'translation_memory', model: null, confidence: 1 };
     let promptVersion = null;
 
+    let usage = null;
+    const startedAt = Date.now();
     if (!translatedContent) {
       const prompt = await resolvePrompt({ businessObjectType: job.businessObjectType });
       const composedPrompt = composeTranslationPrompt(prompt, {
@@ -108,6 +115,7 @@ export const processTranslationJob = async (
         timeoutMs
       );
       translatedContent = result.content;
+      usage = result.usage || null;
       promptVersion = composedPrompt.promptVersion;
       providerMetadata = {
         provider: providerName,
@@ -171,8 +179,35 @@ export const processTranslationJob = async (
     );
 
     await completeJob(job.jobId);
+    await recordUsage({
+      jobId: job.jobId,
+      businessObjectType: job.businessObjectType,
+      businessObjectId: job.businessObjectId,
+      languageCode: job.targetLanguageCode,
+      provider: providerMetadata.provider,
+      model: providerMetadata.model,
+      outcome: 'success',
+      latencyMs: Date.now() - startedAt,
+      inputTokens: usage?.prompt_tokens ?? null,
+      outputTokens: usage?.completion_tokens ?? null,
+      totalTokens: usage?.total_tokens ?? null,
+      memoryHit: Boolean(memoryContent),
+    });
     return { ...persisted, memoryHit: Boolean(memoryContent) };
   } catch (error) {
+    try {
+      await recordUsage({
+        jobId: job.jobId,
+        businessObjectType: job.businessObjectType,
+        businessObjectId: job.businessObjectId,
+        languageCode: job.targetLanguageCode,
+        provider: providerName,
+        outcome: 'failure',
+        memoryHit: false,
+      });
+    } catch {
+      // Usage monitoring must not prevent durable queue failure handling.
+    }
     await failJob(job, error);
     if (job.context?.requestedBy && job.context?.requestedByRole === 'creator') {
       try {

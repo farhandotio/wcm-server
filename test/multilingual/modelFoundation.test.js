@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
 import {
   BUSINESS_OBJECT_REGISTRY,
+  getCmsPageDefinition,
   validateTranslatableContent,
 } from '../../src/config/businessObjectRegistry.js';
 import {
@@ -30,11 +31,10 @@ test('language and business object registries expose the Phase 1 contract', () =
     'title',
     'description',
   ]);
-  assert.deepEqual(BUSINESS_OBJECT_REGISTRY.cms.allowedPageKeys, [
-    'about',
-    'footer',
-    'how-it-works',
-  ]);
+  assert.deepEqual(Object.keys(BUSINESS_OBJECT_REGISTRY.cms.cmsPages), ['about', 'footer', 'how-it-works']);
+  assert.deepEqual(BUSINESS_OBJECT_REGISTRY.cms.modelNames, ['AboutPage', 'Footer', 'HowItWork']);
+  assert.equal(getCmsPageDefinition('about').modelName, 'AboutPage');
+  assert.equal(getCmsPageDefinition('not-a-page'), null);
   assert.equal(validateTranslatableContent('listing', { title: 'Mask' }).valid, true);
   assert.equal(validateTranslatableContent('listing', {}).valid, false);
   assert.equal(validateTranslatableContent('listing', { title: '   ' }).valid, false);
