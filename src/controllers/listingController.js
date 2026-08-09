@@ -25,6 +25,36 @@ import {
   parseCachedJson,
   setCache,
 } from '../utils/cache.js';
+import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import {
+  markObjectTranslationsOutdated,
+  requestBulkTranslations,
+} from '../services/translation/translationEngine.js';
+
+const triggerListingTranslations = async (listing, creatorId, { sourceChanged = false } = {}) => {
+  const sourceVersion = listing.updatedAt.getTime();
+
+  if (sourceChanged) {
+    await markObjectTranslationsOutdated({
+      businessObjectType: 'listing',
+      businessObjectId: listing._id,
+      sourceVersion,
+    });
+  }
+
+  return requestBulkTranslations(
+    getEnabledLanguages()
+      .filter(({ isSource }) => !isSource)
+      .map(({ code }) => ({
+        businessObjectType: 'listing',
+        businessObjectId: listing._id,
+        targetLanguageCode: code,
+        sourceVersion,
+        sourceContent: { title: listing.title, description: listing.description },
+        context: { requestedBy: creatorId, requestedByRole: 'creator' },
+      }))
+  );
+};
 
 // ─────────────────────────────────────────────
 // Helper: listing-এর promotion ও favorites state নিশ্চিত করা
@@ -512,6 +542,8 @@ export const createListing = async (req, res) => {
       creatorId: req.user._id,
     });
 
+    await triggerListingTranslations(newListing, req.user._id);
+
     // ✅ নতুন যোগ করা লাইন — Bing IndexNow-এ URL সাবমিট করা (non-blocking)
     submitToIndexNow(newListing.slug);
 
@@ -596,6 +628,10 @@ export const updateListing = async (req, res) => {
       slug: listing.slug,
       creatorId: listing.creatorId,
     });
+
+    if (updateData.title !== undefined || updateData.description !== undefined) {
+      await triggerListingTranslations(listing, req.user._id, { sourceChanged: true });
+    }
 
     const finalListing = await Listing.findById(id).populate('category culturalTags');
 

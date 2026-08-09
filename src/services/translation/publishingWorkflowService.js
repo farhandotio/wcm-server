@@ -160,6 +160,33 @@ export const applyAutomaticPublication = async ({
   return { published: true, policy, ...result };
 };
 
+export const applyAutomaticPublicationForObject = async ({
+  businessObjectType,
+  businessObjectId,
+  masterState,
+  recipient = null,
+}) => {
+  const records = await TranslationRecord.find({
+    businessObjectType,
+    businessObjectId,
+    publicationStatus: 'draft',
+    translationStatus: { $ne: 'failed' },
+  })
+    .select('_id versionNumber')
+    .lean();
+
+  return Promise.all(
+    records.map((record) =>
+      applyAutomaticPublication({
+        translationRecordId: record._id,
+        masterState,
+        expectedVersion: record.versionNumber,
+        recipient,
+      })
+    )
+  );
+};
+
 export const submitForManualReview = ({ translationRecordId, expectedVersion = null }) =>
   transitionWithOptionalNotification({
     transition: (session) =>

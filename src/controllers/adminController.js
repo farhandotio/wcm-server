@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import { backupDB } from '../utils/dbBackup.js';
 import { restoreDB } from '../utils/dbRestore.js';
 import { recalculateListingScore } from '../utils/listingScoreCalculator.js';
+import { applyAutomaticPublicationForObject } from '../services/translation/publishingWorkflowService.js';
 
 
 // Get Regions by Category
@@ -1001,6 +1002,15 @@ export const updateListingStatus = async (req, res) => {
       slug: listing.slug,
       creatorId: listing.creatorId,
     });
+
+    if (status === 'approved') {
+      await applyAutomaticPublicationForObject({
+        businessObjectType: 'listing',
+        businessObjectId: listing._id,
+        masterState: { status: listing.status },
+        recipient: listing.creatorId,
+      });
+    }
 
     res.status(200).json({
       success: true,

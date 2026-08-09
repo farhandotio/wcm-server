@@ -1,4 +1,34 @@
 import Faq from '../models/Faq.js';
+import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import {
+    markObjectTranslationsOutdated,
+    requestBulkTranslations,
+} from '../services/translation/translationEngine.js';
+
+const triggerFaqTranslations = async (faq, adminId, { sourceChanged = false } = {}) => {
+    const sourceVersion = faq.updatedAt.getTime();
+
+    if (sourceChanged) {
+        await markObjectTranslationsOutdated({
+            businessObjectType: 'faq',
+            businessObjectId: faq._id,
+            sourceVersion,
+        });
+    }
+
+    return requestBulkTranslations(
+        getEnabledLanguages()
+            .filter(({ isSource }) => !isSource)
+            .map(({ code }) => ({
+                businessObjectType: 'faq',
+                businessObjectId: faq._id,
+                targetLanguageCode: code,
+                sourceVersion,
+                sourceContent: { title: faq.question, description: faq.answer },
+                context: { requestedBy: adminId, requestedByRole: 'admin' },
+            }))
+    );
+};
 
 // ১. সব FAQ গেট করা (সবাই দেখতে পারবে)
 export const getAllFaqs = async (req, res) => {
@@ -20,6 +50,7 @@ export const createFaq = async (req, res) => {
         }
 
         const newFaq = await Faq.create({ question, answer, category });
+        await triggerFaqTranslations(newFaq, req.user._id);
         res.status(201).json(newFaq);
     } catch (error) {
         res.status(500).json({ message: 'Failed to create FAQ', error: error.message });
@@ -55,6 +86,10 @@ export const updateFaq = async (req, res) => {
 
         if (!updatedFaq) {
             return res.status(404).json({ message: 'FAQ not found' });
+        }
+
+        if (question !== undefined || answer !== undefined) {
+            await triggerFaqTranslations(updatedFaq, req.user._id, { sourceChanged: true });
         }
 
         res.status(200).json({

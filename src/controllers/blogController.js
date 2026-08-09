@@ -2,6 +2,36 @@ import Blog from '../models/Blog.js';
 import Comment from '../models/Comment.js';
 import mongoose from 'mongoose';
 import slugify from 'slugify';
+import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import {
+  markObjectTranslationsOutdated,
+  requestBulkTranslations,
+} from '../services/translation/translationEngine.js';
+
+const triggerBlogTranslations = async (blog, adminId, { sourceChanged = false } = {}) => {
+  const sourceVersion = blog.updatedAt.getTime();
+
+  if (sourceChanged) {
+    await markObjectTranslationsOutdated({
+      businessObjectType: 'blog',
+      businessObjectId: blog._id,
+      sourceVersion,
+    });
+  }
+
+  return requestBulkTranslations(
+    getEnabledLanguages()
+      .filter(({ isSource }) => !isSource)
+      .map(({ code }) => ({
+        businessObjectType: 'blog',
+        businessObjectId: blog._id,
+        targetLanguageCode: code,
+        sourceVersion,
+        sourceContent: { title: blog.title, description: blog.description },
+        context: { requestedBy: adminId, requestedByRole: 'admin' },
+      }))
+  );
+};
 
 const parseTags = (tags) => {
   if (Array.isArray(tags)) {
@@ -98,6 +128,8 @@ export const createBlog = async (req, res) => {
       status: req.body.status || 'draft',
     });
 
+    await triggerBlogTranslations(newBlog, admin._id);
+
     res.status(201).json({ success: true, blog: newBlog });
   } catch (error) {
     console.error('Blog Create Error:', error);
@@ -174,6 +206,10 @@ export const updateBlog = async (req, res) => {
       returnDocument: 'after',
       runValidators: true,
     });
+
+    if (updateData.title !== undefined || updateData.description !== undefined) {
+      await triggerBlogTranslations(updatedBlog, req.user._id, { sourceChanged: true });
+    }
 
     res.status(200).json({ success: true, blog: updatedBlog });
   } catch (error) {
