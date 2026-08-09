@@ -1,4 +1,5 @@
 import Faq from '../models/Faq.js';
+import TranslationRecord from '../models/TranslationRecord.js';
 import { getEnabledLanguages } from '../config/supportedLanguages.js';
 import {
     markObjectTranslationsOutdated,
@@ -30,11 +31,43 @@ const triggerFaqTranslations = async (faq, adminId, { sourceChanged = false } = 
     );
 };
 
+export const projectFrenchFaqs = (faqs, translations) => {
+    const translatedByFaqId = new Map(
+        translations.map((translation) => [String(translation.businessObjectId), translation.content])
+    );
+
+    return faqs.map((faq) => {
+        const serializedFaq = typeof faq.toObject === 'function' ? faq.toObject() : faq;
+        const translation = translatedByFaqId.get(String(serializedFaq._id));
+
+        return translation
+            ? {
+                ...serializedFaq,
+                question: translation.title || serializedFaq.question,
+                answer: translation.description || serializedFaq.answer,
+            }
+            : serializedFaq;
+    });
+};
+
 // ১. সব FAQ গেট করা (সবাই দেখতে পারবে)
 export const getAllFaqs = async (req, res) => {
     try {
         const faqs = await Faq.find().sort({ createdAt: -1 });
-        res.status(200).json(faqs);
+        if (req.query.language !== 'fr') {
+            return res.status(200).json(faqs);
+        }
+
+        const translations = await TranslationRecord.find({
+            businessObjectType: 'faq',
+            businessObjectId: { $in: faqs.map((faq) => faq._id) },
+            languageCode: 'fr',
+            publicationStatus: 'published',
+        }).select('businessObjectId content').lean();
+
+        const localizedFaqs = projectFrenchFaqs(faqs, translations);
+
+        return res.status(200).json(localizedFaqs);
     } catch (error) {
         res.status(500).json({ message: 'Server Error', error: error.message });
     }
