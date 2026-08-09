@@ -24,6 +24,7 @@ import verificationRoutes from './routes/verificationRoutes.js';
 
 // --- New About Route (Based on our Discussion) ---
 import aboutRoutes from './routes/aboutRoutes.js';
+import translationRoutes from './routes/translationRoutes.js';
 
 const app = express();
 
@@ -78,6 +79,7 @@ app.use('/api/seo', seoRoutes);
 app.use('/api/footer', footerRoutes);
 app.use('/api/emails', emailRoutes);
 app.use('/api/verifications', verificationRoutes);
+app.use('/api/translations', translationRoutes);
 
 /**
  * @section About Page Route
