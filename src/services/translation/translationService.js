@@ -38,6 +38,9 @@ export const upsertTranslation = async (
     author = null,
     authorSnapshot = { role: 'ai' },
     jobId = null,
+    expectedVersion = null,
+    proposalId = null,
+    rollbackFromVersion = null,
   },
   { session = null } = {}
 ) => {
@@ -46,6 +49,12 @@ export const upsertTranslation = async (
     businessObjectId,
     languageCode,
   }).session(session);
+
+  if (expectedVersion !== null && current?.versionNumber !== expectedVersion) {
+    const error = new Error('Translation was changed by another operation');
+    error.code = 'TRANSLATION_VERSION_CONFLICT';
+    throw error;
+  }
 
   if (current && current.metadata.sourceVersion > metadata.sourceVersion) {
     const error = new Error('A newer source version already exists');
@@ -91,6 +100,8 @@ export const upsertTranslation = async (
       modificationSource,
       author,
       authorSnapshot,
+      proposalId,
+      rollbackFromVersion,
     },
     { session }
   );
@@ -114,6 +125,105 @@ export const upsertTranslation = async (
       actorSnapshot: authorSnapshot,
       jobId,
       details: { sourceVersion: metadata.sourceVersion, versionNumber: record.versionNumber },
+    },
+    { session }
+  );
+
+  return { record, version };
+};
+
+export const transitionTranslationState = async (
+  {
+    translationRecordId,
+    expectedVersion = null,
+    changes,
+    modificationSource = 'system',
+    actor = null,
+    actorSnapshot = { role: 'system' },
+    eventType,
+    details = {},
+    proposalId = null,
+    rollbackFromVersion = null,
+  },
+  { session = null } = {}
+) => {
+  const record = await TranslationRecord.findById(translationRecordId).session(session);
+
+  if (!record) {
+    const error = new Error('Translation record not found');
+    error.code = 'TRANSLATION_NOT_FOUND';
+    throw error;
+  }
+
+  if (expectedVersion !== null && record.versionNumber !== expectedVersion) {
+    const error = new Error('Translation was changed by another operation');
+    error.code = 'TRANSLATION_VERSION_CONFLICT';
+    throw error;
+  }
+
+  const allowedChanges = [
+    'content',
+    'slug',
+    'seo',
+    'translationStatus',
+    'publicationStatus',
+    'reviewLevel',
+    'metadata',
+  ];
+  const invalidChanges = Object.keys(changes).filter((key) => !allowedChanges.includes(key));
+  if (invalidChanges.length) {
+    throw new Error(`Unsupported translation state changes: ${invalidChanges.join(', ')}`);
+  }
+
+  const previousValue = snapshotTranslationRecord(record);
+  allowedChanges.forEach((key) => {
+    if (changes[key] !== undefined) {
+      record[key] = changes[key];
+    }
+  });
+  record.versionNumber += 1;
+  await record.save({ session });
+
+  const version = await createTranslationVersion(
+    {
+      translationRecordId: record._id,
+      businessObjectType: record.businessObjectType,
+      businessObjectId: record.businessObjectId,
+      languageCode: record.languageCode,
+      versionNumber: record.versionNumber,
+      sourceVersion: record.metadata.sourceVersion,
+      previousValue,
+      newValue: snapshotTranslationRecord(record),
+      modificationSource,
+      author: actor,
+      authorSnapshot: actorSnapshot,
+      proposalId,
+      rollbackFromVersion,
+    },
+    { session }
+  );
+
+  const actorType =
+    modificationSource === 'administrator'
+      ? 'admin'
+      : modificationSource === 'creator'
+        ? 'creator'
+        : modificationSource === 'ai'
+          ? 'ai'
+          : 'system';
+  await recordTranslationEvent(
+    {
+      eventType,
+      outcome: 'success',
+      businessObjectType: record.businessObjectType,
+      businessObjectId: record.businessObjectId,
+      languageCode: record.languageCode,
+      translationRecordId: record._id,
+      translationVersionId: version._id,
+      actorType,
+      actor,
+      actorSnapshot,
+      details: { ...details, versionNumber: record.versionNumber },
     },
     { session }
   );

@@ -130,7 +130,7 @@ const translationRecordSchema = new mongoose.Schema(
     businessObjectDeletedAt: { type: Date, default: null },
     purgeAt: { type: Date, default: null },
   },
-  { timestamps: true, minimize: false }
+  { timestamps: true, minimize: false, optimisticConcurrency: true }
 );
 
 translationRecordSchema.index(

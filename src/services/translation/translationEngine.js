@@ -17,6 +17,11 @@ import {
   runTranslationPersistenceTransaction,
   upsertTranslation,
 } from './translationService.js';
+import {
+  acceptTranslationProposal as acceptProposal,
+  discardTranslationProposal as discardProposal,
+} from './translationProposalService.js';
+import { restoreTranslationVersion } from './translationReviewService.js';
 
 const validateTranslationRequest = ({
   businessObjectType,
@@ -169,12 +174,6 @@ export const markObjectTranslationsOutdated = ({
     { $set: { translationStatus: 'outdated' } }
   );
 
-const deferredProposalError = () => {
-  const error = new Error('Translation proposal workflow is deferred until its API workflow is implemented');
-  error.code = 'TRANSLATION_PROPOSAL_WORKFLOW_NOT_AVAILABLE';
-  throw error;
-};
-
-export const acceptTranslationProposal = deferredProposalError;
-export const discardTranslationProposal = deferredProposalError;
-export const rollbackTranslation = deferredProposalError;
+export const acceptTranslationProposal = acceptProposal;
+export const discardTranslationProposal = discardProposal;
+export const rollbackTranslation = restoreTranslationVersion;

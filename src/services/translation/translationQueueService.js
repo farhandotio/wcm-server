@@ -12,8 +12,17 @@ export const createTranslationIdempotencyKey = ({
   businessObjectId,
   targetLanguageCode,
   sourceVersion,
+  idempotencyDiscriminator = null,
 }) =>
-  [operation, businessObjectType, businessObjectId, normalizeLanguageCode(targetLanguageCode), sourceVersion]
+  [
+    operation,
+    businessObjectType,
+    businessObjectId,
+    normalizeLanguageCode(targetLanguageCode),
+    sourceVersion,
+    idempotencyDiscriminator,
+  ]
+    .filter((value) => value !== null && value !== undefined && value !== '')
     .join(':');
 
 const createJobId = (idempotencyKey) =>
@@ -30,6 +39,7 @@ export const enqueueTranslationJob = async ({
   priority = 0,
   maxAttempts = DEFAULT_TRANSLATION_MAX_ATTEMPTS,
   context = {},
+  idempotencyDiscriminator = null,
 }) => {
   const idempotencyKey = createTranslationIdempotencyKey({
     operation,
@@ -37,6 +47,7 @@ export const enqueueTranslationJob = async ({
     businessObjectId,
     targetLanguageCode,
     sourceVersion,
+    idempotencyDiscriminator,
   });
 
   const job = await TranslationJob.findOneAndUpdate(

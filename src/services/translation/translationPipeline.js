@@ -13,6 +13,8 @@ import {
   failTranslationJob,
 } from './translationQueueService.js';
 import { createTranslationHash } from './translationNormalization.js';
+import { createTranslationProposal } from './translationProposalService.js';
+import { queueTranslationNotification } from './translationNotificationService.js';
 
 const callProviderWithTimeout = async (provider, payload, timeoutMs) => {
   const abortController = new AbortController();
@@ -68,6 +70,8 @@ export const processTranslationJob = async (
     transaction = runTranslationPersistenceTransaction,
     completeJob = completeTranslationJob,
     failJob = failTranslationJob,
+    createProposal = createTranslationProposal,
+    notify = queueTranslationNotification,
   } = {}
 ) => {
   try {
@@ -128,31 +132,62 @@ export const processTranslationJob = async (
       throw error;
     }
 
+    const metadata = {
+      ...providerMetadata,
+      sourceVersion: job.sourceVersion,
+      sourceHash: createTranslationHash(job.sourceContent),
+      promptVersion,
+      memoryHit: Boolean(memoryContent),
+      origin: 'ai',
+    };
     const persisted = await transaction((session) =>
-      persist(
-        {
-          businessObjectType: job.businessObjectType,
-          businessObjectId: job.businessObjectId,
-          languageCode: job.targetLanguageCode,
-          content: translatedContent,
-          metadata: {
-            ...providerMetadata,
-            sourceVersion: job.sourceVersion,
-            sourceHash: createTranslationHash(job.sourceContent),
-            promptVersion,
-            memoryHit: Boolean(memoryContent),
-            origin: 'ai',
-          },
-          jobId: job.jobId,
-        },
-        { session }
-      )
+      job.operation === 'regenerate'
+        ? createProposal(
+            {
+              businessObjectType: job.businessObjectType,
+              businessObjectId: job.businessObjectId,
+              languageCode: job.targetLanguageCode,
+              sourceVersion: job.sourceVersion,
+              sourceContent: job.sourceContent,
+              proposedContent: translatedContent,
+              metadata,
+              jobId: job.jobId,
+              requestedBy: job.context?.requestedBy,
+              requestedByRole: job.context?.requestedByRole,
+            },
+            { session }
+          )
+        : persist(
+            {
+              businessObjectType: job.businessObjectType,
+              businessObjectId: job.businessObjectId,
+              languageCode: job.targetLanguageCode,
+              content: translatedContent,
+              metadata,
+              jobId: job.jobId,
+            },
+            { session }
+          )
     );
 
     await completeJob(job.jobId);
     return { ...persisted, memoryHit: Boolean(memoryContent) };
   } catch (error) {
     await failJob(job, error);
+    if (job.context?.requestedBy && job.context?.requestedByRole === 'creator') {
+      try {
+        await notify({
+          recipient: job.context.requestedBy,
+          eventType: 'failed',
+          businessObjectType: job.businessObjectType,
+          businessObjectId: job.businessObjectId,
+          languageCode: job.targetLanguageCode,
+          payload: { code: 'TRANSLATION_FAILED' },
+        });
+      } catch {
+        // Notification delivery is deliberately non-blocking for queue failure handling.
+      }
+    }
     throw error;
   }
 };
