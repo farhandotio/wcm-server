@@ -72,9 +72,6 @@ export const BUSINESS_OBJECT_REGISTRY = Object.freeze({
       'about',
       'footer',
       'how-it-works',
-      'privacy-policy',
-      'terms-and-conditions',
-      'cookie-policy',
     ]),
   }),
 });

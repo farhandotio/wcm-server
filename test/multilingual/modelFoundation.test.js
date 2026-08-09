@@ -30,6 +30,11 @@ test('language and business object registries expose the Phase 1 contract', () =
     'title',
     'description',
   ]);
+  assert.deepEqual(BUSINESS_OBJECT_REGISTRY.cms.allowedPageKeys, [
+    'about',
+    'footer',
+    'how-it-works',
+  ]);
   assert.equal(validateTranslatableContent('listing', { title: 'Mask' }).valid, true);
   assert.equal(validateTranslatableContent('listing', {}).valid, false);
   assert.equal(validateTranslatableContent('listing', { title: '   ' }).valid, false);

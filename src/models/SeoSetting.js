@@ -16,6 +16,7 @@ const seoSettingSchema = new mongoose.Schema({
             'creators',
             'terms',
             'privacy',
+            'cookie',
             'how-it-works'
         ]
     },
