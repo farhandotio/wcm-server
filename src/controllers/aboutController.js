@@ -1,5 +1,16 @@
     import AboutPage from '../models/About.js';
     import { v2 as cloudinary } from 'cloudinary';
+    import { triggerCmsTranslations } from '../services/translation/cmsTranslationTrigger.js';
+
+    const saveAboutPage = async (page, adminId) => {
+        await page.save();
+        await triggerCmsTranslations({
+            cmsKey: 'about',
+            document: page,
+            adminId,
+            sourceChanged: true,
+        });
+    };
 
     // ─── Cloudinary Config ───────────────────────────────────────
     cloudinary.config({
@@ -46,6 +57,11 @@
         try {
             await AboutPage.deleteMany();
             const freshPage = await AboutPage.create({});
+            await triggerCmsTranslations({
+                cmsKey: 'about',
+                document: freshPage,
+                adminId: req.user?._id,
+            });
             res.status(200).json({ success: true, message: 'About page reset to defaults.', data: freshPage });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -68,7 +84,7 @@
             if (styleSettings?.textColor)
                 page.aboutHeader.styleSettings.textColor = styleSettings.textColor;
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.aboutHeader });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -102,7 +118,7 @@
                 page.introSection.gridImages = newUrls;
             }
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.introSection });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -132,7 +148,7 @@
             // মঙ্গুজকে জানানো যে অ্যারে চেঞ্জ হয়েছে
             page.markModified('introSection.gridImages');
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, imageUrl: req.file.path });
         } catch (err) {
             console.error("Single Image Update Error:", err);
@@ -168,7 +184,7 @@
                 page.storySection.mainImage = req.file.path;
             }
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.storySection });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -194,7 +210,7 @@
                 page.explorerJourney.steps = parsed;
             }
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.explorerJourney });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -218,7 +234,7 @@
             if (description !== undefined) step.description = description;
             if (iconId !== undefined) step.iconId = iconId;
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.explorerJourney.steps });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -238,7 +254,7 @@
             };
 
             page.explorerJourney.steps.push(newStep);
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(201).json({ success: true, data: page.explorerJourney.steps });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -256,7 +272,7 @@
 
             page.explorerJourney.steps.splice(index, 1);
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.explorerJourney.steps });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -281,7 +297,7 @@
                 page.principlesSection.principlesList = parsed;
             }
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.principlesSection });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -296,7 +312,7 @@
 
             const page = await getOrCreateAboutPage();
             page.principlesSection.principlesList.push({ title, content });
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(201).json({ success: true, data: page.principlesSection.principlesList });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -315,7 +331,7 @@
             if (title) page.principlesSection.principlesList[index].title = title;
             if (content) page.principlesSection.principlesList[index].content = content;
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.principlesSection.principlesList });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -331,7 +347,7 @@
                 return res.status(400).json({ success: false, message: 'Invalid card index.' });
 
             page.principlesSection.principlesList.splice(index, 1);
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.principlesSection.principlesList });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -368,7 +384,7 @@
                 page.visionSection.imageCard.imageUrl = req.file.path;
             }
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.visionSection });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -386,7 +402,7 @@
                 description
             });
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(201).json({ success: true, data: page.visionSection.features });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -412,7 +428,7 @@
 
             page.markModified('visionSection.features');
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.visionSection.features[i] });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -427,7 +443,7 @@
             const i = parseInt(index);
             page.visionSection.features.splice(i, 1);
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, message: "Feature deleted" });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
@@ -460,7 +476,7 @@
                 page.visibilitySection.footerInfo.locations = parsed;
             }
 
-            await page.save();
+            await saveAboutPage(page, req.user?._id);
             res.status(200).json({ success: true, data: page.visibilitySection });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });

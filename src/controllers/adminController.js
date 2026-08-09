@@ -28,6 +28,7 @@ import {
   markObjectTranslationsOutdated,
   requestBulkTranslations,
 } from '../services/translation/translationEngine.js';
+import { triggerCmsTranslations } from '../services/translation/cmsTranslationTrigger.js';
 
 const triggerCategoryTranslations = async (category, adminId, { sourceChanged = false } = {}) => {
   const sourceVersion = category.updatedAt.getTime();
@@ -214,6 +215,11 @@ export const getPageContent = async (req, res) => {
 
     if (!content) {
       content = await HowItWork.create({ pageName: 'how-it-works' });
+      await triggerCmsTranslations({
+        cmsKey: 'how-it-works',
+        document: content,
+        adminId: req.user?._id,
+      });
     }
 
     res.status(200).json({
@@ -289,6 +295,13 @@ export const updatePageContent = async (req, res) => {
         runValidators: true,
       }
     );
+
+    await triggerCmsTranslations({
+      cmsKey: 'how-it-works',
+      document: updatedContent,
+      adminId: req.user?._id,
+      sourceChanged: true,
+    });
 
     res.status(200).json({
       success: true,
@@ -557,6 +570,7 @@ export const updateCategory = async (req, res) => {
       { title },
       { new: true, runValidators: true }
     );
+
     if (!updatedCategory) return res.status(404).json({ message: 'Category not found' });
     await invalidateMetaCaches();
     if (title !== undefined) {

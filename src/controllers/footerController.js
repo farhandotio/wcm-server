@@ -1,4 +1,5 @@
 import { Footer } from '../models/Footer.js';
+import { triggerCmsTranslations } from '../services/translation/cmsTranslationTrigger.js';
 
 // ১. ফুটার ডাটা দেখা (Public - Footer Component এর জন্য)
 export const getFooter = async (req, res) => {
@@ -25,6 +26,13 @@ export const saveFooterSettings = async (req, res) => {
             // upsert: true মানে হলো ডাটা না থাকলে নতুন তৈরি করবে (Add), থাকলে আপডেট করবে (Edit)
         );
 
+        await triggerCmsTranslations({
+            cmsKey: 'footer',
+            document: updatedFooter,
+            adminId: req.user?._id,
+            sourceChanged: true,
+        });
+
         res.status(200).json({
             success: true,
             message: "Footer content saved successfully!",
@@ -45,7 +53,20 @@ export const resetFooterSection = async (req, res) => {
         const update = {};
         update[section] = []; // ওই সেকশনকে খালি করে দিবে
 
-        await Footer.findOneAndUpdate({}, { $set: update });
+        const updatedFooter = await Footer.findOneAndUpdate(
+            {},
+            { $set: update },
+            { new: true, runValidators: true }
+        );
+
+        if (updatedFooter) {
+            await triggerCmsTranslations({
+                cmsKey: 'footer',
+                document: updatedFooter,
+                adminId: req.user?._id,
+                sourceChanged: true,
+            });
+        }
 
         res.status(200).json({ success: true, message: `${section} has been cleared!` });
     } catch (error) {

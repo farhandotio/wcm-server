@@ -81,3 +81,17 @@ test('Category controller queues manual-review translations on create and title 
   assert.match(source, /triggerCategoryTranslations\(updatedCategory, req\.user\._id, \{ sourceChanged: true \}\)/);
   assert.match(source, /markObjectTranslationsOutdated/);
 });
+
+test('CMS controllers queue About, Footer, and How-it-works translation work', () => {
+  const aboutSource = readController('aboutController.js');
+  const footerSource = readController('footerController.js');
+  const adminSource = readController('adminController.js');
+
+  assert.match(aboutSource, /triggerCmsTranslations/);
+  assert.match(aboutSource, /cmsKey: 'about'/);
+  assert.match(footerSource, /triggerCmsTranslations/);
+  assert.match(footerSource, /cmsKey: 'footer'/);
+  assert.match(adminSource, /triggerCmsTranslations/);
+  assert.match(adminSource, /cmsKey: 'how-it-works'/);
+  assert.match(adminSource, /sourceChanged: true/);
+});
