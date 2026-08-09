@@ -1,3 +1,5 @@
+import openaiTranslationProvider from './openaiTranslationProvider.js';
+
 const providers = new Map();
 
 const assertProviderContract = (provider) => {
@@ -33,3 +35,5 @@ export const getTranslationProvider = (name = 'openai') => {
 export const listTranslationProviders = () => [...providers.keys()];
 
 export const clearTranslationProvidersForTests = () => providers.clear();
+
+registerTranslationProvider(openaiTranslationProvider.name, openaiTranslationProvider);
