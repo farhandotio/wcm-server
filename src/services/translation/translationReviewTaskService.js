@@ -6,12 +6,16 @@ import { queueTranslationNotification } from './translationNotificationService.j
 
 const openStatuses = ['pending', 'assigned', 'in_review', 'returned_for_modification'];
 const notFound = () => Object.assign(new Error('Translation review task not found'), { code: 'TRANSLATION_REVIEW_TASK_NOT_FOUND' });
+export const resolveReviewTaskAuditActor = (actor) => ({
+  actorType: actor ? 'admin' : 'system',
+  actor: actor || null,
+  actorSnapshot: { role: actor ? 'admin' : 'system' },
+});
 
 const audit = (task, actor, eventType, details, session) => recordTranslationEvent({
   eventType, outcome: 'success', businessObjectType: task.businessObjectType,
   businessObjectId: task.businessObjectId, languageCode: task.languageCode,
-  translationRecordId: task.translationRecordId, actorType: 'admin', actor,
-  actorSnapshot: { role: 'admin' }, details,
+  translationRecordId: task.translationRecordId, ...resolveReviewTaskAuditActor(actor), details,
 }, { session });
 
 const notifyRoleMembers = async (task, eventType, payload, session) => {

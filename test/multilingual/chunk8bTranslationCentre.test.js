@@ -9,6 +9,8 @@ import TranslationPublishingPolicy from '../../src/models/TranslationPublishingP
 import Listing from '../../src/models/Listing.js';
 import { approveTranslationPublication } from '../../src/services/translation/publishingWorkflowService.js';
 import { getSourceContentForObject } from '../../src/services/translation/translationSourceContentService.js';
+import TranslationOperationalLog from '../../src/models/TranslationOperationalLog.js';
+import TranslationOperationalAlert from '../../src/models/TranslationOperationalAlert.js';
 
 const objectId = () => new mongoose.Types.ObjectId();
 
@@ -23,6 +25,13 @@ test('administrative edit lock has one lock per record and a TTL expiry index', 
   const ttlIndex = TranslationEditLock.schema.indexes().find(([fields, options]) => fields.expiresAt === 1 && options.expireAfterSeconds === 0);
   assert.deepEqual(uniqueIndex[0], { translationRecordId: 1 });
   assert.ok(ttlIndex);
+});
+
+test('translation operational TTL and lock indexes have no duplicate declarations', () => {
+  for (const Model of [TranslationEditLock, TranslationOperationalLog, TranslationOperationalAlert]) {
+    const signatures = Model.schema.indexes().map(([fields]) => JSON.stringify(fields));
+    assert.equal(new Set(signatures).size, signatures.length);
+  }
 });
 
 test('source content resolver uses the same Listing title and description shape as queue triggers', async () => {

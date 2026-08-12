@@ -26,7 +26,7 @@ export const acquireEditLock = async ({ translationRecordId, adminId, now = new 
         $set: { lockedBy: adminId, lockToken, lockedAt: now, expiresAt },
         $setOnInsert: { translationRecordId },
       },
-      { new: true, upsert: true, runValidators: true }
+      { returnDocument: 'after', upsert: true, runValidators: true }
     ).lean();
     return lock;
   } catch (error) {
@@ -40,7 +40,7 @@ export const refreshEditLock = async ({ translationRecordId, adminId, lockToken,
   const lock = await TranslationEditLock.findOneAndUpdate(
     { translationRecordId, lockedBy: adminId, lockToken, expiresAt: { $gt: now } },
     { $set: { expiresAt: expirationFrom(now) } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   ).lean();
   if (!lock) {
     throw createLockError('TRANSLATION_EDIT_LOCK_NOT_HELD', 'Administrative edit lock is missing or expired');

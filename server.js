@@ -7,12 +7,14 @@ import { connectRedis } from './src/config/redis.js';
 import { migratePromotionState } from './src/utils/migratePromotionState.js';
 import { startTranslationQueuePoller } from './src/services/translation/translationQueuePoller.js';
 import { seedLanguageConfigurations } from './src/services/translation/languageConfigurationService.js';
+import { migrateSimpleStaticPageTranslations } from './src/services/translation/staticPageTranslationMigration.js';
 
 const port = process.env.PORT || 5000;
 
 const startServer = async () => {
   await connectDB();
   await seedLanguageConfigurations();
+  await migrateSimpleStaticPageTranslations();
   await migratePromotionState();
   await connectRedis();
 

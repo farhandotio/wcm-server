@@ -48,7 +48,7 @@ export const assertTranslationLanguagePair = async (source, target) => {
 export const registerLanguage = async ({ code, catalogVersion = '1' }, actor) => {
   const definition = getSupportedLanguage(code, { enabledOnly: false });
   if (!definition || definition.isSource) throw lifecycleError('Language is not in the approved registry', 'UNREGISTERED_LANGUAGE');
-  return LanguageConfiguration.findOneAndUpdate({ code: definition.code }, { $setOnInsert: { code: definition.code, name: definition.name, nativeName: definition.nativeName, direction: definition.direction, isSource: false, status: 'registered', catalogVersion, history: [history('registered', actor)] } }, { upsert: true, new: true, runValidators: true });
+  return LanguageConfiguration.findOneAndUpdate({ code: definition.code }, { $setOnInsert: { code: definition.code, name: definition.name, nativeName: definition.nativeName, direction: definition.direction, isSource: false, status: 'registered', catalogVersion, history: [history('registered', actor)] } }, { upsert: true, returnDocument: 'after', runValidators: true });
 };
 
 export const reconcileLanguageBackfill = async (code) => {
@@ -94,7 +94,7 @@ export const retryLanguageBackfill = async (code, actor) => {
 export const publishLanguage = async (code, actor) => {
   const state = await reconcileLanguageBackfill(code);
   if (state.progress.failed || state.progress.pending || state.language.status !== 'ready') throw lifecycleError('All backfill jobs must succeed before publication', 'LANGUAGE_NOT_READY');
-  return LanguageConfiguration.findByIdAndUpdate(state.language._id, { $set: { status: 'published', publishedAt: new Date() }, $push: { history: history('published', actor) } }, { new: true });
+  return LanguageConfiguration.findByIdAndUpdate(state.language._id, { $set: { status: 'published', publishedAt: new Date() }, $push: { history: history('published', actor) } }, { returnDocument: 'after' });
 };
 
 export const setLanguageAvailability = async (code, action, actor) => {

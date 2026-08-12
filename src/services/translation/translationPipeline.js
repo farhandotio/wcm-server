@@ -106,8 +106,8 @@ export const processTranslationJob = async (
     let usage = null;
     const startedAt = Date.now();
     if (!translatedContent) {
-      const prompt = await resolvePrompt({ businessObjectType: job.businessObjectType });
-      const composedPrompt = composeTranslationPrompt(prompt, {
+      const configuredPrompt = await resolvePrompt({ businessObjectType: job.businessObjectType });
+      const composedPrompt = composeTranslationPrompt(configuredPrompt, {
         sourceLanguageCode: job.sourceLanguageCode,
         targetLanguageCode: job.targetLanguageCode,
         businessObjectType: job.businessObjectType,

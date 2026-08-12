@@ -7,7 +7,6 @@ const translationEditLockSchema = new mongoose.Schema(
       ref: 'TranslationRecord',
       required: true,
       unique: true,
-      index: true,
       immutable: true,
     },
     lockedBy: {
@@ -18,7 +17,7 @@ const translationEditLockSchema = new mongoose.Schema(
     },
     lockToken: { type: String, required: true, trim: true },
     lockedAt: { type: Date, required: true, default: Date.now },
-    expiresAt: { type: Date, required: true, index: true },
+    expiresAt: { type: Date, required: true },
   },
   { timestamps: true }
 );

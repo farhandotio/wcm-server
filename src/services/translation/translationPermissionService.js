@@ -16,7 +16,7 @@ export const ensureTranslationRolePresets = async (adminId) => {
     TranslationRole.findOneAndUpdate(
       { name },
       { $setOnInsert: { name, permissions, createdBy: adminId, updatedBy: adminId } },
-      { new: true, upsert: true, runValidators: true }
+      { returnDocument: 'after', upsert: true, runValidators: true }
     )
   ));
 };

@@ -9,7 +9,7 @@ const schema = new mongoose.Schema({
   dedupeKey: { type: String, required: true, unique: true, immutable: true },
   acknowledgedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   acknowledgedAt: { type: Date, default: null },
-  expiresAt: { type: Date, required: true, index: true },
+  expiresAt: { type: Date, required: true },
 }, { timestamps: true, minimize: false });
 schema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export default mongoose.models.TranslationOperationalAlert || mongoose.model('TranslationOperationalAlert', schema);

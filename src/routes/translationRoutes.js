@@ -12,6 +12,7 @@ import {
   requestCreatorTranslationRegeneration,
   resolveLocalizedUrl,
   getTranslationSitemap,
+  getPublicStaticPageTranslation,
   saveCreatorTranslationImprovement,
   updateCreatorTranslationNotificationPreferences,
 } from '../controllers/translationController.js';
@@ -59,6 +60,7 @@ import {
   getTranslationPrompts, createTranslationPrompt, patchTranslationPrompt, activateTranslationPrompt,
   listTranslationDictionary, createTranslationDictionary, patchTranslationDictionary, listProtectedTerms, createProtectedTerm, patchProtectedTerm,
   getTranslationMemory, patchTranslationMemory, archiveTranslationMemory,
+  getAdminStaticPages, getAdminStaticPageEditor, publishAdminStaticPage,
 } from '../controllers/translationAdminController.js';
 import { authMiddleware, authorizeRoles } from '../middlewares/auth.js';
 import { requireTranslationPermission } from '../middlewares/translationPermissions.js';
@@ -68,6 +70,7 @@ const router = express.Router();
 
 router.get('/languages', getPublishedLanguages);
 router.get('/sitemap', getTranslationSitemap);
+router.get('/static-pages/:pageKey/:languageCode', getPublicStaticPageTranslation);
 router.get('/url/:languageCode/:businessObjectType/:slug', resolveLocalizedUrl);
 
 router.use(authMiddleware);
@@ -137,6 +140,9 @@ router.patch('/admin/memory/:memoryId/archive', requireTranslationPermission('tr
 router.get('/admin/records', requireTranslationPermission('translation.centre.read'), searchTranslationRecords);
 router.get('/admin/records/:translationRecordId', requireTranslationPermission('translation.centre.read'), getTranslationRecordDetails);
 router.get('/admin/review-queue', requireTranslationPermission('translation.centre.read'), getTranslationReviewQueue);
+router.get('/admin/static-pages', requireTranslationPermission('translation.centre.read'), getAdminStaticPages);
+router.get('/admin/static-pages/:pageKey/:languageCode', requireTranslationPermission('translation.centre.read'), getAdminStaticPageEditor);
+router.put('/admin/static-pages/:pageKey/:languageCode/publish', requireTranslationPermission('translation.review.decide'), publishAdminStaticPage);
 router.post('/admin/review-tasks/:taskId/assign', requireTranslationPermission('translation.review.assign'), assignReviewTask);
 router.post('/admin/review-tasks/:taskId/claim', requireTranslationPermission('translation.review.assign'), claimReviewTask);
 router.get('/admin/notifications', requireTranslationPermission('translation.centre.read'), getAdminTranslationNotifications);

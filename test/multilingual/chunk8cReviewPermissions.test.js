@@ -6,6 +6,8 @@ import TranslationNotification, { TRANSLATION_NOTIFICATION_EVENTS } from '../../
 import TranslationRole, { TRANSLATION_PERMISSIONS } from '../../src/models/TranslationRole.js';
 import { getTranslationPermissionsForUser } from '../../src/services/translation/translationPermissionService.js';
 import { resolveTranslatedObject } from '../../src/services/translation/translationService.js';
+import TranslationAuditLog from '../../src/models/TranslationAuditLog.js';
+import { resolveReviewTaskAuditActor } from '../../src/services/translation/translationReviewTaskService.js';
 
 test('review workflow schemas retain rejected and returned states with task retention', () => {
   assert.ok(TRANSLATION_STATUSES.includes('rejected'));
@@ -25,6 +27,30 @@ test('administrative notification events remain subject to the shared preference
   assert.ok(TRANSLATION_NOTIFICATION_EVENTS.includes('review_assigned'));
   assert.ok(TRANSLATION_NOTIFICATION_EVENTS.includes('review_outcome'));
   assert.equal(TranslationNotification.schema.path('dedupeKey').options.unique, true);
+});
+
+test('automatic review-task audit is system-owned while human actions retain an Admin actor', async () => {
+  const adminId = new TranslationRecord.base.Types.ObjectId();
+  assert.deepEqual(resolveReviewTaskAuditActor(null), {
+    actorType: 'system', actor: null, actorSnapshot: { role: 'system' },
+  });
+  assert.deepEqual(resolveReviewTaskAuditActor(adminId), {
+    actorType: 'admin', actor: adminId, actorSnapshot: { role: 'admin' },
+  });
+
+  const systemAudit = new TranslationAuditLog({
+    eventId: 'system-review-task', eventType: 'translation.review_task_created', outcome: 'success',
+    businessObjectType: 'faq', businessObjectId: adminId, languageCode: 'fr',
+    ...resolveReviewTaskAuditActor(null),
+  });
+  await systemAudit.validate();
+
+  const invalidAdminAudit = new TranslationAuditLog({
+    eventId: 'admin-review-task', eventType: 'translation.review_assigned', outcome: 'success',
+    businessObjectType: 'faq', businessObjectId: adminId, languageCode: 'fr',
+    actorType: 'admin', actorSnapshot: { role: 'admin' },
+  });
+  await assert.rejects(invalidAdminAudit.validate(), /actor is required for admin events/);
 });
 
 test('public localized resolver exposes only translated content, slug and SEO—not review comments', async () => {

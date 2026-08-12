@@ -67,6 +67,11 @@ import ProtectedTerm from '../models/ProtectedTerm.js';
 import { activatePromptVersion, createPromptVersion } from '../services/translation/promptService.js';
 import { archiveMemoryEntry, listMemoryEntries, updateMemoryEntry } from '../services/translation/translationMemoryService.js';
 import { normalizeTerminologyFields } from '../services/translation/translationTerminologyService.js';
+import {
+  getStaticPageEditor,
+  listStaticPages,
+  publishStaticPageTranslation,
+} from '../services/translation/staticPageTranslationService.js';
 
 const sendError = (res, error) => {
   const statusByCode = {
@@ -84,6 +89,9 @@ const sendError = (res, error) => {
     TRANSLATION_EXPORT_LIMIT_EXCEEDED: 409,
     TRANSLATION_VALIDATION_FAILED: 400,
     UNSUPPORTED_BULK_OPERATION: 400,
+    INVALID_STATIC_PAGE_TRANSLATION: 400,
+    INVALID_STATIC_PAGE_CONTENT: 400,
+    STATIC_PAGE_SOURCE_NOT_FOUND: 404,
   };
   return res.status(statusByCode[error.code] || 400).json({
     success: false,
@@ -91,6 +99,29 @@ const sendError = (res, error) => {
     message: error.message,
     ...(error.validationErrors ? { validationErrors: error.validationErrors } : {}),
   });
+};
+
+export const getAdminStaticPages = async (_req, res) => {
+  res.json({ success: true, data: listStaticPages() });
+};
+
+export const getAdminStaticPageEditor = async (req, res) => {
+  try {
+    const data = await getStaticPageEditor(req.params);
+    if (!data) return res.status(404).json({ success: false, message: 'Static page not found' });
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error);
+  }
+};
+
+export const publishAdminStaticPage = async (req, res) => {
+  try {
+    const data = await publishStaticPageTranslation({ ...req.params, content: req.body.content });
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error);
+  }
 };
 
 export const getPublishingPolicies = async (req, res) => {
@@ -197,7 +228,7 @@ export const createTranslationRole = async (req, res) => {
 
 export const updateTranslationRole = async (req, res) => {
   try {
-    const data = await TranslationRole.findByIdAndUpdate(req.params.roleId, { $set: { ...(req.body.name ? { name: req.body.name } : {}), ...(req.body.permissions ? { permissions: req.body.permissions } : {}), ...(req.body.members ? { members: req.body.members } : {}), ...(req.body.isActive !== undefined ? { isActive: req.body.isActive } : {}), updatedBy: req.user._id } }, { new: true, runValidators: true });
+    const data = await TranslationRole.findByIdAndUpdate(req.params.roleId, { $set: { ...(req.body.name ? { name: req.body.name } : {}), ...(req.body.permissions ? { permissions: req.body.permissions } : {}), ...(req.body.members ? { members: req.body.members } : {}), ...(req.body.isActive !== undefined ? { isActive: req.body.isActive } : {}), updatedBy: req.user._id } }, { returnDocument: 'after', runValidators: true });
     if (!data) return res.status(404).json({ success: false, code: 'TRANSLATION_ROLE_NOT_FOUND', message: 'Translation role not found' });
     return res.json({ success: true, data });
   } catch (error) { return sendError(res, error); }
@@ -648,9 +679,9 @@ export const createTranslationConfiguration = async (req, res) => { try { res.st
 export const activateTranslationConfiguration = async (req, res) => { try { res.json({ success: true, data: await activateConfigurationVersion(req.params.configurationId, req.user._id) }); } catch (error) { sendError(res, error); } };
 export const getTranslationPrompts = async (_req, res) => { try { res.json({ success: true, data: await TranslationPrompt.find().sort({ key: 1, version: -1 }).lean() }); } catch (error) { sendError(res, error); } };
 export const createTranslationPrompt = async (req, res) => { try { res.status(201).json({ success: true, data: await createPromptVersion({ ...req.body, actorId: req.user._id }) }); } catch (error) { sendError(res, error); } };
-export const patchTranslationPrompt = async (req, res) => { try { const data = await TranslationPrompt.findByIdAndUpdate(req.params.promptId, { $set: { systemTemplate: req.body.systemTemplate, userTemplate: req.body.userTemplate, requiredVariables: req.body.requiredVariables } }, { new: true, runValidators: true }); if (!data) return res.status(404).json({ success: false, message: 'Translation prompt not found' }); return res.json({ success: true, data }); } catch (error) { return sendError(res, error); } };
+export const patchTranslationPrompt = async (req, res) => { try { const data = await TranslationPrompt.findByIdAndUpdate(req.params.promptId, { $set: { systemTemplate: req.body.systemTemplate, userTemplate: req.body.userTemplate, requiredVariables: req.body.requiredVariables } }, { returnDocument: 'after', runValidators: true }); if (!data) return res.status(404).json({ success: false, message: 'Translation prompt not found' }); return res.json({ success: true, data }); } catch (error) { return sendError(res, error); } };
 export const activateTranslationPrompt = async (req, res) => { try { res.json({ success: true, data: await activatePromptVersion(req.params.promptId, req.user._id) }); } catch (error) { sendError(res, error); } };
-const terminologyController = (Model, normalized) => ({ list: async (_req, res) => { try { res.json({ success: true, data: await Model.find().sort({ updatedAt: -1 }).lean() }); } catch (e) { sendError(res, e); } }, create: async (req, res) => { try { res.status(201).json({ success: true, data: await Model.create({ ...req.body, ...normalized(req.body), createdBy: req.user._id, updatedBy: req.user._id }) }); } catch (e) { sendError(res, e); } }, patch: async (req, res) => { try { const data = await Model.findByIdAndUpdate(req.params.id, { $set: { ...req.body, ...normalized(req.body), updatedBy: req.user._id } }, { new: true, runValidators: true }); if (!data) return res.status(404).json({ success: false, message: 'Terminology entry not found' }); return res.json({ success: true, data }); } catch (e) { return sendError(res, e); } } });
+const terminologyController = (Model, normalized) => ({ list: async (_req, res) => { try { res.json({ success: true, data: await Model.find().sort({ updatedAt: -1 }).lean() }); } catch (e) { sendError(res, e); } }, create: async (req, res) => { try { res.status(201).json({ success: true, data: await Model.create({ ...req.body, ...normalized(req.body), createdBy: req.user._id, updatedBy: req.user._id }) }); } catch (e) { sendError(res, e); } }, patch: async (req, res) => { try { const data = await Model.findByIdAndUpdate(req.params.id, { $set: { ...req.body, ...normalized(req.body), updatedBy: req.user._id } }, { returnDocument: 'after', runValidators: true }); if (!data) return res.status(404).json({ success: false, message: 'Terminology entry not found' }); return res.json({ success: true, data }); } catch (e) { return sendError(res, e); } } });
 const dictionary = terminologyController(TranslationDictionaryEntry, normalizeTerminologyFields);
 const protectedTerm = terminologyController(ProtectedTerm, normalizeTerminologyFields);
 export const listTranslationDictionary = dictionary.list; export const createTranslationDictionary = dictionary.create; export const patchTranslationDictionary = dictionary.patch;

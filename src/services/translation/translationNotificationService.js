@@ -65,7 +65,7 @@ export const queueTranslationNotification = async (
         expiresAt: new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000),
       },
     },
-    { new: true, upsert: true, runValidators: true, session }
+    { returnDocument: 'after', upsert: true, runValidators: true, session }
   );
 };
 
@@ -81,7 +81,7 @@ export const markTranslationNotificationRead = (notificationId, recipient) =>
   TranslationNotification.findOneAndUpdate(
     { _id: notificationId, recipient },
     { $set: { isRead: true, readAt: new Date() } },
-    { new: true }
+    { returnDocument: 'after' }
   );
 
 export const updateTranslationNotificationPreferences = (
@@ -97,7 +97,7 @@ export const updateTranslationNotificationPreferences = (
       },
       $setOnInsert: { user },
     },
-    { new: true, upsert: true, runValidators: true }
+    { returnDocument: 'after', upsert: true, runValidators: true }
   );
 
 export const markNotificationOutboxProcessed = (notificationId, succeeded = true) =>
@@ -110,5 +110,5 @@ export const markNotificationOutboxProcessed = (notificationId, succeeded = true
       },
       $inc: { outboxAttempts: 1 },
     },
-    { new: true }
+    { returnDocument: 'after' }
   );

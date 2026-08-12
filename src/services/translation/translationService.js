@@ -248,14 +248,14 @@ export const setTranslationStatus = (translationRecordId, translationStatus) =>
   TranslationRecord.findByIdAndUpdate(
     translationRecordId,
     { $set: { translationStatus } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 
 export const setPublicationStatus = (translationRecordId, publicationStatus) =>
   TranslationRecord.findByIdAndUpdate(
     translationRecordId,
     { $set: { publicationStatus } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 
 export const resolveTranslatedObject = async ({

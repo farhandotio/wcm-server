@@ -72,7 +72,7 @@ export const enqueueTranslationJob = async ({
         availableAt: new Date(),
       },
     },
-    { new: true, upsert: true, runValidators: true }
+    { returnDocument: 'after', upsert: true, runValidators: true }
   );
 
   return job;
@@ -92,7 +92,7 @@ export const claimNextTranslationJob = async (workerId, now = new Date()) => {
       $set: { status: 'processing', lockedAt: now, lockedBy: workerId },
       $inc: { attemptCount: 1 },
     },
-    { new: true, sort: { priority: -1, createdAt: 1 } }
+    { returnDocument: 'after', sort: { priority: -1, createdAt: 1 } }
   );
 
   if (!job) {
@@ -121,7 +121,7 @@ export const completeTranslationJob = (jobId, now = new Date()) =>
         'attempts.$[attempt].outcome': 'success',
       },
     },
-    { new: true, arrayFilters: [{ 'attempt.outcome': 'processing' }] }
+    { returnDocument: 'after', arrayFilters: [{ 'attempt.outcome': 'processing' }] }
   );
 
 export const calculateRetryDelayMs = (attemptCount, random = Math.random) => {
@@ -156,7 +156,7 @@ export const failTranslationJob = async (
         'attempts.$[attempt].errorMessage': error.message,
       },
     },
-    { new: true, arrayFilters: [{ 'attempt.outcome': 'processing' }] }
+    { returnDocument: 'after', arrayFilters: [{ 'attempt.outcome': 'processing' }] }
   );
 };
 
@@ -188,12 +188,12 @@ export const retryDeadLetterTranslationJob = (jobId) =>
         failure: { code: null, message: null },
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 
 export const cancelTranslationJob = (jobId) =>
   TranslationJob.findOneAndUpdate(
     { jobId, status: { $in: ['queued', 'retry_scheduled'] } },
     { $set: { status: 'cancelled', lockedAt: null, lockedBy: null } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );

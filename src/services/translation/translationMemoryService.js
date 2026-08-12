@@ -66,7 +66,7 @@ export const createMemoryEntryFromApprovedVersion = async ({
       },
       $setOnInsert: { createdBy: actorId },
     },
-    { new: true, upsert: true, runValidators: true }
+    { returnDocument: 'after', upsert: true, runValidators: true }
   );
 };
 
@@ -83,12 +83,12 @@ export const updateMemoryEntry = (entryId, updates, actorId) =>
         updatedBy: actorId,
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );
 
 export const archiveMemoryEntry = (entryId, actorId) =>
   TranslationMemory.findByIdAndUpdate(
     entryId,
     { $set: { isArchived: true, archivedAt: new Date(), updatedBy: actorId } },
-    { new: true, runValidators: true }
+    { returnDocument: 'after', runValidators: true }
   );

@@ -24,6 +24,7 @@ import {
 } from '../services/translation/creatorTranslationService.js';
 import TranslationRecord from '../models/TranslationRecord.js';
 import { getPublicTranslationSitemap } from '../services/translation/translationSitemapService.js';
+import { getPublishedStaticPageTranslation } from '../services/translation/staticPageTranslationService.js';
 
 const sendError = (res, error) => {
   const statusByCode = {
@@ -56,6 +57,16 @@ const sendError = (res, error) => {
 export const getTranslationSitemap = async (_req, res) => {
   try {
     return res.json({ success: true, data: await getPublicTranslationSitemap() });
+  } catch (error) {
+    return sendError(res, error);
+  }
+};
+
+export const getPublicStaticPageTranslation = async (req, res) => {
+  try {
+    const data = await getPublishedStaticPageTranslation(req.params);
+    if (!data) return res.status(404).json({ success: false, message: 'Published static page translation not found' });
+    return res.json({ success: true, data });
   } catch (error) {
     return sendError(res, error);
   }
