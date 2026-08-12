@@ -2,7 +2,7 @@ import { getActivePrompt, composeTranslationPrompt } from './promptService.js';
 import { findApprovedExactMatch } from './translationMemoryService.js';
 import { listApplicableTerminology } from './translationTerminologyService.js';
 import { getTranslationProvider } from './providers/translationProviderRegistry.js';
-import { validateAiTranslation } from './translationValidator.js';
+import { validateAiTranslation, validateTranslationForPublication } from './translationValidator.js';
 import {
   runTranslationPersistenceTransaction,
   upsertTranslation,
@@ -16,6 +16,10 @@ import { createTranslationHash } from './translationNormalization.js';
 import { createTranslationProposal } from './translationProposalService.js';
 import { queueTranslationNotification } from './translationNotificationService.js';
 import TranslationUsageEvent from '../../models/TranslationUsageEvent.js';
+import { resolvePublishingPolicy } from './publishingWorkflowService.js';
+import { createOrReopenManualReviewTask } from './translationReviewTaskService.js';
+import { getActiveTranslationConfiguration } from './translationConfigurationService.js';
+import { recordOperationalEvent } from './translationOperationalLogService.js';
 
 const callProviderWithTimeout = async (provider, payload, timeoutMs) => {
   const abortController = new AbortController();
@@ -61,7 +65,7 @@ export const processTranslationJob = async (
   job,
   {
     providerName = 'openai',
-    timeoutMs = DEFAULT_TRANSLATION_TIMEOUT_MS,
+    timeoutMs = null,
     findMemory = findApprovedExactMatch,
     getTerminology = listApplicableTerminology,
     resolvePrompt = getActivePrompt,
@@ -73,6 +77,12 @@ export const processTranslationJob = async (
     failJob = failTranslationJob,
     createProposal = createTranslationProposal,
     notify = queueTranslationNotification,
+    resolvePolicy = (request) => TranslationUsageEvent.db.readyState === 1
+      ? resolvePublishingPolicy(request)
+      : { publicationMode: 'manual_review' },
+    createReviewTask = (request, options) => TranslationUsageEvent.db.readyState === 1
+      ? createOrReopenManualReviewTask(request, options)
+      : null,
     // Unit callers can process a job without a Mongo connection; production persistence
     // happens whenever the model connection is ready.
     recordUsage = (event) =>
@@ -80,6 +90,9 @@ export const processTranslationJob = async (
   } = {}
 ) => {
   try {
+    const configuration = await getActiveTranslationConfiguration();
+    const effectiveTimeoutMs = timeoutMs || configuration.queue.timeoutMs || DEFAULT_TRANSLATION_TIMEOUT_MS;
+    const effectiveProviderName = providerName === 'openai' ? configuration.provider.name : providerName;
     const memoryContent = await resolveMemoryContent(job, findMemory);
     const terminology = await getTerminology({
       sourceLanguageCode: job.sourceLanguageCode,
@@ -102,7 +115,7 @@ export const processTranslationJob = async (
         dictionaryEntries: terminology.dictionaryEntries,
         protectedTerms: terminology.protectedTerms,
       });
-      const provider = resolveProvider(providerName);
+      const provider = resolveProvider(effectiveProviderName);
       const result = await callProviderWithTimeout(
         provider,
         {
@@ -112,13 +125,13 @@ export const processTranslationJob = async (
           targetLanguageCode: job.targetLanguageCode,
           terminology,
         },
-        timeoutMs
+        effectiveTimeoutMs
       );
       translatedContent = result.content;
       usage = result.usage || null;
       promptVersion = composedPrompt.promptVersion;
       providerMetadata = {
-        provider: providerName,
+        provider: effectiveProviderName,
         model: result.model || null,
         confidence: result.confidence ?? null,
       };
@@ -148,8 +161,11 @@ export const processTranslationJob = async (
       memoryHit: Boolean(memoryContent),
       origin: 'ai',
     };
-    const persisted = await transaction((session) =>
-      job.operation === 'regenerate'
+    const policy = await resolvePolicy({ businessObjectType: job.businessObjectType, languageCode: job.targetLanguageCode });
+    const publicationValidation = await validateTranslationForPublication({ businessObjectType: job.businessObjectType, sourceLanguageCode: job.sourceLanguageCode, targetLanguageCode: job.targetLanguageCode, sourceContent: job.sourceContent, translatedContent, ...terminology, sourceVersion: job.sourceVersion, expectedSourceVersion: job.sourceVersion, policy });
+    if (!publicationValidation.valid) { const error = new Error('Translation publication validation failed'); error.code = 'TRANSLATION_PUBLICATION_VALIDATION_FAILED'; error.validationErrors = publicationValidation.errors; throw error; }
+    const persisted = await transaction(async (session) => {
+      const result = await (job.operation === 'regenerate'
         ? createProposal(
             {
               businessObjectType: job.businessObjectType,
@@ -163,8 +179,7 @@ export const processTranslationJob = async (
               requestedBy: job.context?.requestedBy,
               requestedByRole: job.context?.requestedByRole,
             },
-            { session }
-          )
+            { session })
         : persist(
             {
               businessObjectType: job.businessObjectType,
@@ -174,11 +189,16 @@ export const processTranslationJob = async (
               metadata,
               jobId: job.jobId,
             },
-            { session }
-          )
-    );
+            { session }));
+      if (job.operation !== 'regenerate' && result?.record) {
+        const task = await createReviewTask({ record: result.record, policy }, { session });
+        return { ...result, task };
+      }
+      return result;
+    });
 
     await completeJob(job.jobId);
+    await recordOperationalEvent({ eventType: 'job.completed', outcome: 'success', jobId: job.jobId, provider: providerMetadata.provider, metadata: { attemptCount: job.attemptCount, memoryHit: Boolean(memoryContent) } });
     await recordUsage({
       jobId: job.jobId,
       businessObjectType: job.businessObjectType,
@@ -209,6 +229,7 @@ export const processTranslationJob = async (
       // Usage monitoring must not prevent durable queue failure handling.
     }
     await failJob(job, error);
+    await recordOperationalEvent({ eventType: 'job.failed', outcome: 'failure', jobId: job.jobId, provider: providerName, metadata: { code: error.code, attemptCount: job.attemptCount } });
     if (job.context?.requestedBy && job.context?.requestedByRole === 'creator') {
       try {
         await notify({

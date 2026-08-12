@@ -5,7 +5,8 @@ import TranslationJob from '../../models/TranslationJob.js';
 import TranslationProposal from '../../models/TranslationProposal.js';
 import TranslationRecord from '../../models/TranslationRecord.js';
 import { BUSINESS_OBJECT_TYPES } from '../../config/businessObjectRegistry.js';
-import { getEnabledLanguages, SOURCE_LANGUAGE_CODE } from '../../config/supportedLanguages.js';
+import { SOURCE_LANGUAGE_CODE } from '../../config/supportedLanguages.js';
+import { getEnabledLanguageConfigurations } from './languageConfigurationService.js';
 import { regenerateTranslation } from './translationEngine.js';
 import {
   acceptTranslationProposal,
@@ -126,7 +127,7 @@ export const listCreatorTranslationAvailability = async ({
   creatorId,
 }) => {
   await assertCreatorOwnsBusinessObject({ businessObjectType, businessObjectId, creatorId });
-  const targetLanguages = getEnabledLanguages().filter(({ isSource }) => !isSource);
+  const targetLanguages = (await getEnabledLanguageConfigurations()).filter(({ isSource }) => !isSource);
   const [records, jobs] = await Promise.all([
     TranslationRecord.find({ businessObjectType, businessObjectId }).lean(),
     TranslationJob.find({ businessObjectType, businessObjectId })

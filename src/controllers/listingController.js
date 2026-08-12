@@ -25,7 +25,8 @@ import {
   parseCachedJson,
   setCache,
 } from '../utils/cache.js';
-import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import { getEnabledLanguageConfigurations } from '../services/translation/languageConfigurationService.js';
+import { projectLocalizedObject, projectLocalizedObjects, resolveLocalizedBusinessObjectId, sendPublicLanguageError } from '../services/translation/publicLocalizationService.js';
 import {
   markObjectTranslationsOutdated,
   requestBulkTranslations,
@@ -43,7 +44,7 @@ const triggerListingTranslations = async (listing, creatorId, { sourceChanged = 
   }
 
   return requestBulkTranslations(
-    getEnabledLanguages()
+    (await getEnabledLanguageConfigurations())
       .filter(({ isSource }) => !isSource)
       .map(({ code }) => ({
         businessObjectType: 'listing',
@@ -400,7 +401,7 @@ export const getCategoriesAndTags = async (req, res) => {
     const cacheKey = await buildVersionedCacheKey('meta:categories_tags', `p${page}:l${limit}`);
     const cachedData = parseCachedJson(await getCache(cacheKey));
 
-    if (cachedData) {
+    if (cachedData && !req.query.language) {
       return res.status(200).json(cachedData);
     }
 
@@ -444,9 +445,10 @@ export const getCategoriesAndTags = async (req, res) => {
     const totalTags = await Tag.countDocuments();
     const sortedRegions = regions.filter(Boolean).sort();
 
+    const localizedCategories = await projectLocalizedObjects({ businessObjectType: 'category', objects: categories, language: req.query.language });
     const responseData = {
       success: true,
-      categories: categories || [],
+      categories: localizedCategories || [],
       regions: sortedRegions || [],
       tags: tagsWithCount || [],
       pagination: {
@@ -461,6 +463,7 @@ export const getCategoriesAndTags = async (req, res) => {
     res.status(200).json(responseData);
   } catch (error) {
     console.error('Meta Data Error:', error);
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({
       success: false,
       message: 'Error fetching meta data',
@@ -844,6 +847,7 @@ export const getPublicListings = async (req, res) => {
       };
     });
 
+    const localizedListings = await projectLocalizedObjects({ businessObjectType: 'listing', objects: formattedListings, language: req.query.language });
     return res.status(200).json({
       success: true,
       total: totalListings,
@@ -851,10 +855,11 @@ export const getPublicListings = async (req, res) => {
       currentPage: parseInt(page) || 1,
       nextOffset: skip + formattedListings.length,
       hasMore: skip + formattedListings.length < totalListings,
-      listings: formattedListings,
+      listings: localizedListings,
     });
   } catch (error) {
     console.error('Public Listings Error:', error);
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
@@ -1077,8 +1082,17 @@ export const getCuratedCollections = async (req, res) => {
     );
 
     const filteredResults = results.filter(Boolean);
-    res.status(200).json({ success: true, data: filteredResults });
+    const localizedListings = await projectLocalizedObjects({ businessObjectType: 'listing', objects: filteredResults.flatMap(({ listings }) => listings), language: req.query.language });
+    const listingById = new Map(localizedListings.map((listing) => [String(listing._id), listing]));
+    const localizedCategories = await projectLocalizedObjects({ businessObjectType: 'category', objects: filteredResults.map(({ categoryId, categoryTitle }) => ({ _id: categoryId, title: categoryTitle })), language: req.query.language });
+    const categoryById = new Map(localizedCategories.map((category) => [String(category._id), category.title]));
+    const localizedResults = filteredResults.map((collection) => {
+      const categoryTitle = categoryById.get(String(collection.categoryId)) || collection.categoryTitle;
+      return { ...collection, categoryTitle, categorySlug: slugify(categoryTitle, { lower: true, strict: true }), listings: collection.listings.map((listing) => listingById.get(String(listing._id)) || listing) };
+    });
+    res.status(200).json({ success: true, data: localizedResults });
   } catch (error) {
+    if (error.status) return sendPublicLanguageError(res, error);
     console.error('Curated Collections Error:', error);
     res.status(500).json({
       success: false,
@@ -1253,6 +1267,7 @@ export const getTrendingListings = async (req, res) => {
       };
     });
 
+    const localizedListings = await projectLocalizedObjects({ businessObjectType: 'listing', objects: formattedListings, language: req.query.language });
     res.status(200).json({
       success: true,
       total,
@@ -1260,10 +1275,11 @@ export const getTrendingListings = async (req, res) => {
       currentPage: parseInt(page),
       nextOffset: skip + formattedListings.length,
       hasMore: skip + formattedListings.length < total,
-      listings: formattedListings,
+      listings: localizedListings,
     });
   } catch (error) {
     console.error('Trending Listings Error:', error);
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({
       success: false,
       message: 'Server error while fetching trending listings',
@@ -1288,7 +1304,9 @@ export const getListingById = async (req, res) => {
     if (cachedListing) {
       listing = cachedListing;
     } else {
-      const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { slug: id };
+      const localizedId = !mongoose.Types.ObjectId.isValid(id) && req.query.language
+        ? await resolveLocalizedBusinessObjectId({ businessObjectType: 'listing', slug: id, language: req.query.language }) : null;
+      const query = localizedId || mongoose.Types.ObjectId.isValid(id) ? { _id: localizedId || id } : { slug: id };
       listing = await Listing.findOne(query)
         .populate('creatorId', 'firstName lastName username profile.profileImage')
         .populate('category', 'title')
@@ -1360,8 +1378,10 @@ export const getListingById = async (req, res) => {
     };
 
     handleViewLog();
-    res.status(200).json(listing);
+    const localizedListing = await projectLocalizedObject({ businessObjectType: 'listing', object: listing, language: req.query.language });
+    res.status(200).json(localizedListing);
   } catch (error) {
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -1,6 +1,6 @@
 import Faq from '../models/Faq.js';
-import TranslationRecord from '../models/TranslationRecord.js';
-import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import { projectLocalizedObjects, sendPublicLanguageError } from '../services/translation/publicLocalizationService.js';
+import { getEnabledLanguageConfigurations } from '../services/translation/languageConfigurationService.js';
 import {
     markObjectTranslationsOutdated,
     requestBulkTranslations,
@@ -18,7 +18,7 @@ const triggerFaqTranslations = async (faq, adminId, { sourceChanged = false } = 
     }
 
     return requestBulkTranslations(
-        getEnabledLanguages()
+        (await getEnabledLanguageConfigurations())
             .filter(({ isSource }) => !isSource)
             .map(({ code }) => ({
                 businessObjectType: 'faq',
@@ -54,21 +54,10 @@ export const projectFrenchFaqs = (faqs, translations) => {
 export const getAllFaqs = async (req, res) => {
     try {
         const faqs = await Faq.find().sort({ createdAt: -1 });
-        if (req.query.language !== 'fr') {
-            return res.status(200).json(faqs);
-        }
-
-        const translations = await TranslationRecord.find({
-            businessObjectType: 'faq',
-            businessObjectId: { $in: faqs.map((faq) => faq._id) },
-            languageCode: 'fr',
-            publicationStatus: 'published',
-        }).select('businessObjectId content').lean();
-
-        const localizedFaqs = projectFrenchFaqs(faqs, translations);
-
+        const localizedFaqs = await projectLocalizedObjects({ businessObjectType: 'faq', objects: faqs, language: req.query.language });
         return res.status(200).json(localizedFaqs);
     } catch (error) {
+        if (error.status) return sendPublicLanguageError(res, error);
         res.status(500).json({ message: 'Server Error', error: error.message });
     }
 };

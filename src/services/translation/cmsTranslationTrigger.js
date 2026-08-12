@@ -1,4 +1,4 @@
-import { getEnabledLanguages } from '../../config/supportedLanguages.js';
+import { getEnabledLanguageConfigurations } from './languageConfigurationService.js';
 import {
   markObjectTranslationsOutdated,
   requestBulkTranslations,
@@ -69,7 +69,7 @@ export const triggerCmsTranslations = async ({
   }
 
   return requestBulkTranslations(
-    getEnabledLanguages()
+    (await getEnabledLanguageConfigurations())
       .filter(({ isSource }) => !isSource)
       .map(({ code }) => ({
         businessObjectType: 'cms',

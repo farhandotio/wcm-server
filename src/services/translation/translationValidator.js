@@ -88,6 +88,17 @@ export const validateTranslationStructure = (sourceContent, translatedContent) =
   return { valid: errors.length === 0, errors };
 };
 
+export const validateTranslationForPublication = async ({
+  businessObjectType, sourceLanguageCode, targetLanguageCode, sourceContent, translatedContent,
+  dictionaryEntries = [], protectedTerms = [], sourceVersion, expectedSourceVersion, policy = null,
+}) => {
+  const base = validateAiTranslation({ businessObjectType, sourceLanguageCode, targetLanguageCode, sourceContent, translatedContent, dictionaryEntries, protectedTerms });
+  const errors = [...base.errors];
+  if (expectedSourceVersion != null && sourceVersion !== expectedSourceVersion) errors.push({ code: 'SOURCE_VERSION_MISMATCH', field: null, message: 'Source version changed before publication validation' });
+  if (!policy?.publicationMode) errors.push({ code: 'PUBLISHING_POLICY_UNAVAILABLE', field: null, message: 'No active publishing policy could be resolved' });
+  return { valid: errors.length === 0, errors };
+};
+
 export const validateProtectedTerms = (
   sourceContent,
   translatedContent,

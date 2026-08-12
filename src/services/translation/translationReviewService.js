@@ -8,6 +8,8 @@ import {
   upsertTranslation,
 } from './translationService.js';
 import { queueTranslationNotification } from './translationNotificationService.js';
+import { resolvePublishingPolicy } from './publishingWorkflowService.js';
+import { reopenReviewTaskForRecord } from './translationReviewTaskService.js';
 
 export const saveHumanReview = async ({
   businessObjectType,
@@ -92,6 +94,80 @@ export const saveHumanReview = async ({
   });
 };
 
+export const saveAdminTranslationEdit = async ({
+  translationRecordId,
+  sourceLanguageCode = 'en',
+  sourceContent,
+  sourceVersion,
+  translatedContent,
+  seo,
+  expectedVersion,
+  adminId,
+}) => {
+  if (!adminId) {
+    throw new Error('Admin actor is required to edit a translation');
+  }
+
+  const record = await TranslationRecord.findById(translationRecordId);
+  if (!record) {
+    const error = new Error('Translation record not found');
+    error.code = 'TRANSLATION_NOT_FOUND';
+    throw error;
+  }
+
+  const terminology = await listApplicableTerminology({
+    sourceLanguageCode,
+    targetLanguageCode: record.languageCode,
+  });
+  const validation = validateAiTranslation({
+    businessObjectType: record.businessObjectType,
+    sourceLanguageCode,
+    targetLanguageCode: record.languageCode,
+    sourceContent,
+    translatedContent,
+    ...terminology,
+  });
+  if (!validation.valid) {
+    const error = new Error('Administrative translation edit failed validation');
+    error.code = 'TRANSLATION_VALIDATION_FAILED';
+    error.validationErrors = validation.errors;
+    throw error;
+  }
+
+  const metadata = {
+    ...(record.metadata?.toObject?.() || record.metadata || {}),
+    sourceVersion,
+    origin: 'administrator',
+    lastReviewedAt: new Date(),
+    reviewer: adminId,
+    reviewerRole: 'admin',
+    lastModifiedBy: adminId,
+  };
+
+  return runTranslationPersistenceTransaction(async (session) => {
+    const result = await transitionTranslationState(
+      {
+        translationRecordId,
+        expectedVersion,
+        changes: {
+          content: translatedContent,
+          seo,
+          translationStatus: 'admin_reviewed',
+          reviewLevel: 'admin_reviewed',
+          metadata,
+        },
+        modificationSource: 'administrator',
+        actor: adminId,
+        actorSnapshot: { role: 'admin' },
+        eventType: 'translation.edited',
+      },
+      { session });
+    const policy = await resolvePublishingPolicy({ businessObjectType: result.record.businessObjectType, languageCode: result.record.languageCode });
+    if (policy.publicationMode === 'manual_review') await reopenReviewTaskForRecord({ translationRecordId, actorId: adminId, comment: 'Translation edited' }, { session });
+    return result;
+  });
+};
+
 export const setTranslationVerified = ({
   translationRecordId,
   expectedVersion,
@@ -129,8 +205,8 @@ export const restoreTranslationVersion = async ({
   if (!target) {
     throw new Error('Translation version not found');
   }
-  return runTranslationPersistenceTransaction((session) =>
-    transitionTranslationState(
+  return runTranslationPersistenceTransaction(async (session) => {
+    const result = await transitionTranslationState(
       {
         translationRecordId,
         expectedVersion,
@@ -149,7 +225,9 @@ export const restoreTranslationVersion = async ({
         eventType: 'translation.rollback',
         rollbackFromVersion: versionNumber,
       },
-      { session }
-    )
-  );
+      { session });
+    const policy = await resolvePublishingPolicy({ businessObjectType: result.record.businessObjectType, languageCode: result.record.languageCode });
+    if (policy.publicationMode === 'manual_review') await reopenReviewTaskForRecord({ translationRecordId, actorId: adminId, comment: `Restored version ${versionNumber}` }, { session });
+    return result;
+  });
 };

@@ -1,6 +1,7 @@
     import AboutPage from '../models/About.js';
     import { v2 as cloudinary } from 'cloudinary';
     import { triggerCmsTranslations } from '../services/translation/cmsTranslationTrigger.js';
+    import { projectLocalizedObject, sendPublicLanguageError } from '../services/translation/publicLocalizationService.js';
 
     const saveAboutPage = async (page, adminId) => {
         await page.save();
@@ -47,8 +48,10 @@
     export const getAboutPage = async (req, res) => {
         try {
             const page = await getOrCreateAboutPage();
-            res.status(200).json({ success: true, data: page });
+            const localizedPage = await projectLocalizedObject({ businessObjectType: 'cms', object: page, language: req.query.language });
+            res.status(200).json({ success: true, data: localizedPage });
         } catch (err) {
+            if (err.status) return sendPublicLanguageError(res, err);
             res.status(500).json({ success: false, message: err.message });
         }
     };

@@ -2,7 +2,8 @@ import Blog from '../models/Blog.js';
 import Comment from '../models/Comment.js';
 import mongoose from 'mongoose';
 import slugify from 'slugify';
-import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import { getEnabledLanguageConfigurations } from '../services/translation/languageConfigurationService.js';
+import { projectLocalizedObject, projectLocalizedObjects, resolveLocalizedBusinessObjectId, sendPublicLanguageError } from '../services/translation/publicLocalizationService.js';
 import {
   markObjectTranslationsOutdated,
   requestBulkTranslations,
@@ -20,7 +21,7 @@ const triggerBlogTranslations = async (blog, adminId, { sourceChanged = false } 
   }
 
   return requestBulkTranslations(
-    getEnabledLanguages()
+    (await getEnabledLanguageConfigurations())
       .filter(({ isSource }) => !isSource)
       .map(({ code }) => ({
         businessObjectType: 'blog',
@@ -230,9 +231,10 @@ export const getBlogs = async (req, res) => {
     const blogs = await Blog.find(filter).sort({ createdAt: -1 }).skip(offset).limit(limit);
     const total = await Blog.countDocuments(filter);
 
+    const localizedBlogs = await projectLocalizedObjects({ businessObjectType: 'blog', objects: blogs, language: req.query.language });
     res.status(200).json({
       success: true,
-      blogs,
+      blogs: localizedBlogs,
       pagination: {
         total,
         offset,
@@ -241,6 +243,7 @@ export const getBlogs = async (req, res) => {
       },
     });
   } catch (error) {
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -249,13 +252,15 @@ export const getBlogById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const isObjectId = mongoose.Types.ObjectId.isValid(id);
+    const localizedId = !mongoose.Types.ObjectId.isValid(id) && req.query.language
+      ? await resolveLocalizedBusinessObjectId({ businessObjectType: 'blog', slug: id, language: req.query.language }) : null;
+    const isObjectId = mongoose.Types.ObjectId.isValid(id) || Boolean(localizedId);
 
     let blog;
 
     if (isObjectId) {
       blog = await Blog.findOne({
-        $or: [{ _id: id }, { slug: id }],
+        $or: [{ _id: localizedId || id }, { slug: id }],
       });
     } else {
       blog = await Blog.findOne({ slug: id });
@@ -268,11 +273,13 @@ export const getBlogById = async (req, res) => {
       });
     }
 
+    const localizedBlog = await projectLocalizedObject({ businessObjectType: 'blog', object: blog, language: req.query.language });
     res.status(200).json({
       success: true,
-      blog,
+      blog: localizedBlog,
     });
   } catch (error) {
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({
       success: false,
       message: error.message,

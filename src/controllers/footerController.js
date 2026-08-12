@@ -1,5 +1,6 @@
 import { Footer } from '../models/Footer.js';
 import { triggerCmsTranslations } from '../services/translation/cmsTranslationTrigger.js';
+import { projectLocalizedObject, sendPublicLanguageError } from '../services/translation/publicLocalizationService.js';
 
 // ১. ফুটার ডাটা দেখা (Public - Footer Component এর জন্য)
 export const getFooter = async (req, res) => {
@@ -8,8 +9,10 @@ export const getFooter = async (req, res) => {
         if (!footer) {
             return res.status(404).json({ success: false, message: "No footer data found" });
         }
-        res.status(200).json({ success: true, data: footer });
+        const localizedFooter = await projectLocalizedObject({ businessObjectType: 'cms', object: footer, language: req.query.language });
+        res.status(200).json({ success: true, data: localizedFooter });
     } catch (error) {
+        if (error.status) return sendPublicLanguageError(res, error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

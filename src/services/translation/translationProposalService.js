@@ -7,6 +7,8 @@ import {
   upsertTranslation,
 } from './translationService.js';
 import { recordTranslationEvent } from './translationAuditService.js';
+import { resolvePublishingPolicy } from './publishingWorkflowService.js';
+import { reopenReviewTaskForRecord } from './translationReviewTaskService.js';
 
 const assertActiveProposal = (proposal, now = new Date()) => {
   if (!proposal || proposal.status !== 'active') {
@@ -185,6 +187,12 @@ export const acceptTranslationProposal = async ({
     currentProposal.resolvedAt = new Date();
     currentProposal.resolvedBy = actorId;
     await currentProposal.save({ session });
+    if (actorRole === 'admin') {
+      const policy = await resolvePublishingPolicy({ businessObjectType: currentProposal.businessObjectType, languageCode: currentProposal.languageCode });
+      if (policy.publicationMode === 'manual_review') {
+        await reopenReviewTaskForRecord({ translationRecordId: currentProposal.translationRecordId, actorId, comment: 'AI proposal accepted' }, { session });
+      }
+    }
     return result;
   });
 };

@@ -5,8 +5,6 @@ import {
 } from '../../config/businessObjectRegistry.js';
 import {
   SOURCE_LANGUAGE_CODE,
-  isSupportedLanguageCode,
-  normalizeLanguageCode,
 } from '../../config/supportedLanguages.js';
 import {
   enqueueBulkTranslationJobs,
@@ -22,8 +20,9 @@ import {
   discardTranslationProposal as discardProposal,
 } from './translationProposalService.js';
 import { restoreTranslationVersion } from './translationReviewService.js';
+import { assertTranslationLanguagePair } from './languageConfigurationService.js';
 
-const validateTranslationRequest = ({
+const validateTranslationRequest = async ({
   businessObjectType,
   sourceLanguageCode,
   targetLanguageCode,
@@ -34,13 +33,7 @@ const validateTranslationRequest = ({
     throw new Error(`Unsupported business object type: ${businessObjectType}`);
   }
 
-  if (!isSupportedLanguageCode(sourceLanguageCode) || !isSupportedLanguageCode(targetLanguageCode)) {
-    throw new Error('Source and target languages must be enabled');
-  }
-
-  if (normalizeLanguageCode(sourceLanguageCode) === normalizeLanguageCode(targetLanguageCode)) {
-    throw new Error('Source and target languages must be different');
-  }
+  await assertTranslationLanguagePair(sourceLanguageCode, targetLanguageCode);
 
   if (!Number.isInteger(sourceVersion) || sourceVersion < 1) {
     throw new Error('sourceVersion must be a positive integer');
@@ -60,8 +53,9 @@ export const requestTranslation = async ({
   sourceVersion,
   sourceContent,
   context = {},
+  idempotencyDiscriminator = null,
 }) => {
-  validateTranslationRequest({
+  await validateTranslationRequest({
     businessObjectType,
     sourceLanguageCode,
     targetLanguageCode,
@@ -77,6 +71,7 @@ export const requestTranslation = async ({
     sourceVersion,
     sourceContent,
     context,
+    idempotencyDiscriminator,
   });
 };
 
@@ -85,13 +80,13 @@ export const requestBulkTranslations = async (requests) => {
     sourceLanguageCode: SOURCE_LANGUAGE_CODE,
     ...request,
   }));
-  normalizedRequests.forEach(validateTranslationRequest);
+  await Promise.all(normalizedRequests.map(validateTranslationRequest));
   return enqueueBulkTranslationJobs(normalizedRequests);
 };
 
-export const regenerateTranslation = (request) => {
+export const regenerateTranslation = async (request) => {
   const normalizedRequest = { sourceLanguageCode: SOURCE_LANGUAGE_CODE, ...request };
-  validateTranslationRequest(normalizedRequest);
+  await validateTranslationRequest(normalizedRequest);
   return enqueueTranslationJob({ ...normalizedRequest, operation: 'regenerate' });
 };
 
@@ -106,6 +101,7 @@ export const saveHumanImprovement = async ({
   actorId,
   actorRole,
 }) => {
+  await assertTranslationLanguagePair(sourceLanguageCode, targetLanguageCode);
   if (!['admin', 'creator'].includes(actorRole)) {
     throw new Error('actorRole must be admin or creator');
   }

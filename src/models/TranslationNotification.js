@@ -7,6 +7,10 @@ export const TRANSLATION_NOTIFICATION_EVENTS = Object.freeze([
   'failed',
   'updated',
   'requires_attention',
+  'review_requested',
+  'review_assigned',
+  'bulk_operation_completed',
+  'review_outcome',
 ]);
 export const TRANSLATION_NOTIFICATION_RETENTION_DAYS = 90;
 

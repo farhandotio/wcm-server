@@ -87,6 +87,7 @@ const translationJobSchema = new mongoose.Schema(
 );
 
 translationJobSchema.index({ status: 1, availableAt: 1, priority: -1, createdAt: 1 });
+translationJobSchema.index({ 'context.bulkOperationId': 1, status: 1, createdAt: -1 });
 
 export default mongoose.models.TranslationJob ||
   mongoose.model('TranslationJob', translationJobSchema);

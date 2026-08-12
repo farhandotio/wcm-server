@@ -17,11 +17,12 @@ import {
 } from '../utils/cache.js';
 import dns from 'dns/promises';
 import { Resend } from 'resend';
-import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import { getEnabledLanguageConfigurations } from '../services/translation/languageConfigurationService.js';
 import {
   markObjectTranslationsOutdated,
   requestBulkTranslations,
 } from '../services/translation/translationEngine.js';
+import { projectLocalizedObject, projectLocalizedObjects, resolveLocalizedBusinessObjectId, sendPublicLanguageError } from '../services/translation/publicLocalizationService.js';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -41,7 +42,7 @@ const triggerCreatorProfileTranslations = async (
   }
 
   return requestBulkTranslations(
-    getEnabledLanguages()
+    (await getEnabledLanguageConfigurations())
       .filter(({ isSource }) => !isSource)
       .map(({ code }) => ({
         businessObjectType: 'creatorProfile',
@@ -488,13 +489,15 @@ export const getPublicProfile = async (req, res) => {
     const cacheKey = `user:profile:${normalizedId}`;
     const cachedProfile = parseCachedJson(await getCache(cacheKey));
 
-    if (cachedProfile) {
+    if (cachedProfile && !req.query.language) {
       return res.status(200).json(cachedProfile);
     }
 
+    const localizedId = !mongoose.Types.ObjectId.isValid(id) && req.query.language
+      ? await resolveLocalizedBusinessObjectId({ businessObjectType: 'creatorProfile', slug: id, language: req.query.language }) : null;
     let query;
-    if (mongoose.Types.ObjectId.isValid(id)) {
-      query = { _id: id };
+    if (localizedId || mongoose.Types.ObjectId.isValid(id)) {
+      query = { _id: localizedId || id };
     } else {
       query = {
         $or: [{ username: id.toLowerCase() }, { slug: id }],
@@ -526,9 +529,11 @@ export const getPublicProfile = async (req, res) => {
       user.slug ? setCache(`user:profile:${user.slug.toLowerCase()}`, responseData, 3600) : null,
     ]);
 
-    res.status(200).json(responseData);
+    const localizedUser = await projectLocalizedObject({ businessObjectType: 'creatorProfile', object: user, language: req.query.language });
+    res.status(200).json({ ...responseData, user: localizedUser });
   } catch (error) {
     console.error('Public Profile Error:', error);
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({ message: 'Internal Server Error' });
   }
 };
@@ -543,7 +548,7 @@ export const getFamousCreators = async (req, res) => {
     );
     const cachedData = parseCachedJson(await getCache(cacheKey));
 
-    if (cachedData) {
+    if (cachedData && !req.query.language) {
       return res.status(200).json(cachedData);
     }
 
@@ -633,9 +638,10 @@ export const getFamousCreators = async (req, res) => {
 
     const totalCreators = totalCountData[0]?.total || 0;
 
+    const localizedCreators = await projectLocalizedObjects({ businessObjectType: 'creatorProfile', objects: creators, language: req.query.language });
     const responseData = {
       success: true,
-      data: creators,
+      data: localizedCreators,
       pagination: {
         total: totalCreators,
         limit: parsedLimit,
@@ -649,6 +655,7 @@ export const getFamousCreators = async (req, res) => {
     res.status(200).json(responseData);
   } catch (error) {
     console.error('Famous Creators Tactical Error:', error);
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({ message: 'Internal Server Error' });
   }
 };

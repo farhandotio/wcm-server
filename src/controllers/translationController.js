@@ -23,6 +23,7 @@ import {
   assertCreatorTranslationMutationAllowed,
 } from '../services/translation/creatorTranslationService.js';
 import TranslationRecord from '../models/TranslationRecord.js';
+import { getPublicTranslationSitemap } from '../services/translation/translationSitemapService.js';
 
 const sendError = (res, error) => {
   const statusByCode = {
@@ -50,6 +51,14 @@ const sendError = (res, error) => {
     code: error.code,
     message: error.message,
   });
+};
+
+export const getTranslationSitemap = async (_req, res) => {
+  try {
+    return res.json({ success: true, data: await getPublicTranslationSitemap() });
+  } catch (error) {
+    return sendError(res, error);
+  }
 };
 
 export const resolveLocalizedUrl = async (req, res) => {

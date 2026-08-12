@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import TranslationJob from '../../models/TranslationJob.js';
 import { SOURCE_LANGUAGE_CODE, normalizeLanguageCode } from '../../config/supportedLanguages.js';
 import { canonicalizeTranslationValue } from './translationNormalization.js';
+import { getActiveTranslationConfiguration } from './translationConfigurationService.js';
 
 export const DEFAULT_TRANSLATION_TIMEOUT_MS = 60_000;
 export const DEFAULT_TRANSLATION_MAX_ATTEMPTS = 3;
@@ -37,10 +38,11 @@ export const enqueueTranslationJob = async ({
   sourceVersion,
   sourceContent,
   priority = 0,
-  maxAttempts = DEFAULT_TRANSLATION_MAX_ATTEMPTS,
+  maxAttempts = null,
   context = {},
   idempotencyDiscriminator = null,
 }) => {
+  const activeConfig = await getActiveTranslationConfiguration();
   const idempotencyKey = createTranslationIdempotencyKey({
     operation,
     businessObjectType,
@@ -64,7 +66,7 @@ export const enqueueTranslationJob = async ({
         sourceVersion,
         sourceContent: JSON.parse(canonicalizeTranslationValue(sourceContent)),
         priority,
-        maxAttempts,
+        maxAttempts: maxAttempts || activeConfig.queue.maxAttempts || DEFAULT_TRANSLATION_MAX_ATTEMPTS,
         context,
         status: 'queued',
         availableAt: new Date(),
@@ -160,26 +162,17 @@ export const failTranslationJob = async (
 
 export const getTranslationJob = (jobId) => TranslationJob.findOne({ jobId }).lean();
 
-export const requeueStalledTranslationJobs = ({
-  olderThan = new Date(Date.now() - DEFAULT_TRANSLATION_TIMEOUT_MS * 2),
-} = {}) =>
-  TranslationJob.updateMany(
-    {
-      status: 'processing',
-      lockedAt: { $lte: olderThan },
-      $expr: { $lt: ['$attemptCount', '$maxAttempts'] },
-    },
-    {
-      $set: {
-        status: 'retry_scheduled',
-        availableAt: new Date(),
-        lockedAt: null,
-        lockedBy: null,
-        'failure.code': 'TRANSLATION_WORKER_STALLED',
-        'failure.message': 'The previous worker lock expired',
-      },
-    }
-  );
+export const requeueStalledTranslationJobs = async ({ olderThan = null } = {}) => {
+  const config = await getActiveTranslationConfiguration();
+  const now = new Date();
+  const threshold = olderThan || new Date(now.getTime() - (config.queue.timeoutMs || DEFAULT_TRANSLATION_TIMEOUT_MS) * 2);
+  const jobs = await TranslationJob.find({ status: 'processing', lockedAt: { $lte: threshold } });
+  await Promise.all(jobs.map((job) => {
+    const exhausted = job.attemptCount >= job.maxAttempts;
+    return TranslationJob.updateOne({ _id: job._id, status: 'processing' }, { $set: { status: exhausted ? 'dead_letter' : 'retry_scheduled', availableAt: now, lockedAt: null, lockedBy: null, 'failure.code': 'TRANSLATION_WORKER_STALLED', 'failure.message': 'The previous worker lock expired', 'attempts.$[attempt].finishedAt': now, 'attempts.$[attempt].outcome': 'timeout', 'attempts.$[attempt].errorCode': 'TRANSLATION_WORKER_STALLED', 'attempts.$[attempt].errorMessage': 'The previous worker lock expired' } }, { arrayFilters: [{ 'attempt.outcome': 'processing' }] });
+  }));
+  return { matchedCount: jobs.length, modifiedCount: jobs.length };
+};
 
 export const retryDeadLetterTranslationJob = (jobId) =>
   TranslationJob.findOneAndUpdate(

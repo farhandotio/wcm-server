@@ -6,13 +6,13 @@ import Listing from '../../models/Listing.js';
 import LocalizedUrlRedirect from '../../models/LocalizedUrlRedirect.js';
 import TranslationRecord from '../../models/TranslationRecord.js';
 import User from '../../models/User.js';
+import LanguageConfiguration from '../../models/LanguageConfiguration.js';
 import {
   getBusinessObjectDefinition,
   isSupportedBusinessObjectType,
 } from '../../config/businessObjectRegistry.js';
 import {
   DEFAULT_LANGUAGE_CODE,
-  getEnabledLanguages,
   isSupportedLanguageCode,
   normalizeLanguageCode,
 } from '../../config/supportedLanguages.js';
@@ -399,7 +399,12 @@ export const getLanguageAlternates = async ({ businessObjectType, businessObject
     slugsByLanguage.set(DEFAULT_LANGUAGE_CODE, sourceObject.slug);
   }
 
-  return getEnabledLanguages().flatMap(({ code }) => {
+  const publishedLanguages = await LanguageConfiguration.find({ status: 'published' })
+    .select('code')
+    .sort({ isSource: -1, code: 1 })
+    .lean();
+
+  return publishedLanguages.flatMap(({ code }) => {
     const localizedSlug = slugsByLanguage.get(code);
     return localizedSlug
       ? [{

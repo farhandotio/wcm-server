@@ -5,6 +5,7 @@ import TranslationAuditLog from '../../models/TranslationAuditLog.js';
 import TranslationJob from '../../models/TranslationJob.js';
 import TranslationProposal from '../../models/TranslationProposal.js';
 import TranslationUsageEvent from '../../models/TranslationUsageEvent.js';
+import TranslationReviewTask from '../../models/TranslationReviewTask.js';
 import Listing from '../../models/Listing.js';
 import User from '../../models/User.js';
 import Category from '../../models/Category.js';
@@ -17,6 +18,10 @@ import {
   BUSINESS_OBJECT_TYPES,
   getCmsPageDefinition,
 } from '../../config/businessObjectRegistry.js';
+import { getSourceContentForObject } from './translationSourceContentService.js';
+import { resolvePublishingPolicy } from './publishingWorkflowService.js';
+import { listApplicableTerminology } from './translationTerminologyService.js';
+import { getActiveEditLock } from './translationLockService.js';
 
 const objectId = (value) => mongoose.isValidObjectId(value) ? new mongoose.Types.ObjectId(value) : null;
 const supportedTypes = new Set(Object.values(BUSINESS_OBJECT_TYPES));
@@ -116,6 +121,14 @@ export const searchTranslationRecords = async (query) => {
   return { records: await Promise.all(records.map(recordProjection)), pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
 };
 
+export const getTranslationRecordsForBulk = async (query, { limit = 5_001 } = {}) => {
+  const filter = await buildSearchFilter(query);
+  return TranslationRecord.find(filter)
+    .sort({ updatedAt: -1 })
+    .limit(limit)
+    .lean();
+};
+
 export const getTranslationDashboard = async () => {
   const [records, jobs, failures, usage] = await Promise.all([
     TranslationRecord.aggregate([{
@@ -125,6 +138,14 @@ export const getTranslationDashboard = async () => {
         byReview: [{ $group: { _id: '$reviewLevel', count: { $sum: 1 } } }],
         byProvider: [{ $group: { _id: '$metadata.provider', count: { $sum: 1 } } }],
         memoryHits: [{ $group: { _id: '$metadata.memoryHit', count: { $sum: 1 } } }],
+        confidence: [{
+          $bucket: {
+            groupBy: '$metadata.confidence',
+            boundaries: [0, 0.5, 0.8, 1.000001],
+            default: 'unavailable',
+            output: { count: { $sum: 1 } },
+          },
+        }],
       },
     }]),
     TranslationJob.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
@@ -134,17 +155,121 @@ export const getTranslationDashboard = async () => {
   return { records: records[0] || {}, jobs, recentFailures: failures, usage, cost: { available: false, value: null } };
 };
 
+export const getBulkOperationSummary = async (bulkOperationId) => {
+  const jobFilter = { 'context.bulkOperationId': bulkOperationId };
+  const [summary, jobIds] = await Promise.all([
+    TranslationJob.aggregate([
+      { $match: jobFilter },
+      {
+        $facet: {
+          byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          failures: [{
+            $match: { status: { $in: ['failed', 'dead_letter'] } },
+          }, {
+            $group: { _id: '$failure.code', count: { $sum: 1 } },
+          }],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ]),
+    TranslationJob.find(jobFilter).distinct('jobId'),
+  ]);
+  const usage = jobIds.length
+    ? await TranslationUsageEvent.aggregate([
+      { $match: { jobId: { $in: jobIds } } },
+      {
+        $group: {
+          _id: '$outcome',
+          events: { $sum: 1 },
+          inputTokens: { $sum: '$inputTokens' },
+          outputTokens: { $sum: '$outputTokens' },
+          totalTokens: { $sum: '$totalTokens' },
+          averageLatencyMs: { $avg: '$latencyMs' },
+        },
+      },
+    ])
+    : [];
+  const aggregate = summary[0] || {};
+  return {
+    bulkOperationId,
+    total: aggregate.total?.[0]?.count || 0,
+    byStatus: aggregate.byStatus || [],
+    failures: aggregate.failures || [],
+    usage,
+  };
+};
+
+export const listBulkOperationJobs = async (bulkOperationId, query = {}) => {
+  const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 50, 1), 100);
+  const filter = {
+    'context.bulkOperationId': bulkOperationId,
+    ...(query.status ? { status: query.status } : {}),
+  };
+  const [total, jobs] = await Promise.all([
+    TranslationJob.countDocuments(filter),
+    TranslationJob.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+  ]);
+  return { jobs, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+};
+
+export const getTranslationOperationalExportData = async (query) => {
+  const records = await getTranslationRecordsForBulk(query, { limit: 50_001 });
+  if (records.length > 50_000) {
+    const error = new Error('Translation export is limited to 50,000 records');
+    error.code = 'TRANSLATION_EXPORT_LIMIT_EXCEEDED';
+    throw error;
+  }
+  const objectIds = records.map((record) => record.businessObjectId);
+  const [jobs, usage] = objectIds.length
+    ? await Promise.all([
+      TranslationJob.find({ businessObjectId: { $in: objectIds } }).sort({ createdAt: -1 }).lean(),
+      TranslationUsageEvent.find({ businessObjectId: { $in: objectIds } }).sort({ createdAt: -1 }).lean(),
+    ])
+    : [[], []];
+  return { records, jobs, usage };
+};
+
 export const getTranslationRecordDetails = async (translationRecordId) => {
   const id = objectId(translationRecordId);
   const record = id && await TranslationRecord.findById(id).lean();
   if (!record) { const error = new Error('Translation record not found'); error.code = 'TRANSLATION_NOT_FOUND'; throw error; }
-  const [versions, audit, jobs, proposals, master] = await Promise.all([
+  const [versions, audit, jobs, proposals, master, source, policy, terminology, editLock, reviewTasks] = await Promise.all([
     TranslationVersion.find({ translationRecordId: id }).sort({ versionNumber: -1 }).lean(),
     TranslationAuditLog.find({ translationRecordId: id }).sort({ createdAt: -1 }).lean(),
     TranslationJob.find({ businessObjectType: record.businessObjectType, businessObjectId: record.businessObjectId, targetLanguageCode: record.languageCode }).sort({ createdAt: -1 }).lean(),
     TranslationProposal.find({ translationRecordId: id }).sort({ createdAt: -1 }).lean(),
     resolveMasterSummary(record.businessObjectType, record.businessObjectId),
+    getSourceContentForObject({
+      businessObjectType: record.businessObjectType,
+      businessObjectId: record.businessObjectId,
+    }).catch(() => null),
+    resolvePublishingPolicy({
+      businessObjectType: record.businessObjectType,
+      languageCode: record.languageCode,
+    }),
+    listApplicableTerminology({ sourceLanguageCode: 'en', targetLanguageCode: record.languageCode }),
+    getActiveEditLock({ translationRecordId: id }),
+    TranslationReviewTask.find({ translationRecordId: id }).sort({ createdAt: -1 }).populate('assignee completedBy', 'firstName lastName email').lean(),
   ]);
   const usage = await TranslationUsageEvent.find({ jobId: { $in: jobs.map((job) => job.jobId) } }).sort({ createdAt: -1 }).lean();
-  return { record, master, versions, audit, jobs, usage, proposals };
+  return {
+    record,
+    master,
+    versions,
+    audit,
+    jobs,
+    usage,
+    proposals,
+    sourceContent: source?.sourceContent || null,
+    sourceVersion: source?.sourceVersion || null,
+    policy,
+    terminology,
+    editLock,
+    reviewTasks,
+  };
 };

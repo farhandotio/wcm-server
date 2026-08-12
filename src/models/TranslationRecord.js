@@ -16,6 +16,8 @@ export const TRANSLATION_STATUSES = Object.freeze([
   'admin_reviewed',
   'outdated',
   'failed',
+  'rejected',
+  'returned_for_modification',
 ]);
 
 export const PUBLICATION_STATUSES = Object.freeze([
@@ -153,6 +155,10 @@ translationRecordSchema.index({ languageCode: 1, publicationStatus: 1, updatedAt
 translationRecordSchema.pre('validate', function normalizeAndValidate() {
   this.languageCode = normalizeLanguageCode(this.languageCode);
 
+  if (this.languageCode === 'en') {
+    this.invalidate('languageCode', 'English source records are read-only');
+  }
+
   const definition = BUSINESS_OBJECT_REGISTRY[this.businessObjectType];
   const contentValidation = validateTranslatableContent(this.businessObjectType, this.content);
 
@@ -188,6 +194,15 @@ translationRecordSchema.pre('validate', function normalizeAndValidate() {
 
   this.purgeAt = calculateTranslationPurgeAt(this.businessObjectDeletedAt);
 });
+
+const rejectEnglishQueryMutation = async function rejectEnglishQueryMutation() {
+  const record = await this.model.findOne(this.getQuery()).select('languageCode').lean();
+  if (record?.languageCode === 'en') {
+    throw Object.assign(new Error('English source records are read-only'), { code: 'SOURCE_LANGUAGE_READ_ONLY' });
+  }
+};
+
+translationRecordSchema.pre(['findOneAndUpdate', 'updateOne', 'deleteOne', 'findOneAndDelete'], rejectEnglishQueryMutation);
 
 export default mongoose.models.TranslationRecord ||
   mongoose.model('TranslationRecord', translationRecordSchema);

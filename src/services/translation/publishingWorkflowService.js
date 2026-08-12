@@ -6,6 +6,10 @@ import {
   transitionTranslationState,
 } from './translationService.js';
 import { queueTranslationNotification } from './translationNotificationService.js';
+import {
+  completeTranslationReviewTask,
+  createOrReopenManualReviewTask,
+} from './translationReviewTaskService.js';
 
 export const DEFAULT_PUBLISHING_POLICIES = Object.freeze({
   [BUSINESS_OBJECT_TYPES.LISTING]: Object.freeze({
@@ -181,21 +185,25 @@ export const applyAutomaticPublicationForObject = async ({
   );
 };
 
-export const submitForManualReview = ({ translationRecordId, expectedVersion = null }) =>
-  transitionWithOptionalNotification({
-    transition: (session) =>
-      transitionTranslationState(
+export const submitForManualReview = async ({ translationRecordId, expectedVersion = null, actor = null }) => {
+  const record = await TranslationRecord.findById(translationRecordId).lean();
+  if (!record) throw Object.assign(new Error('Translation record not found'), { code: 'TRANSLATION_NOT_FOUND' });
+  const policy = await resolvePublishingPolicy({ businessObjectType: record.businessObjectType, languageCode: record.languageCode });
+  return runTranslationPersistenceTransaction(async (session) => {
+    const result = await transitionTranslationState(
         {
           translationRecordId,
           expectedVersion,
           changes: { publicationStatus: 'draft' },
           eventType: 'translation.review_submitted',
         },
-        { session }
-      ),
+        { session });
+    const task = await createOrReopenManualReviewTask({ record: result.record, policy, actor }, { session });
+    return { ...result, task };
   });
+};
 
-export const approveTranslationPublication = ({
+export const approveTranslationPublication = async ({
   translationRecordId,
   expectedVersion = null,
   adminId,
@@ -206,9 +214,26 @@ export const approveTranslationPublication = ({
     throw new Error('Admin actor is required');
   }
 
-  return transitionWithOptionalNotification({
-    transition: (session) =>
-      transitionTranslationState(
+  const record = await TranslationRecord.findById(translationRecordId).lean();
+  if (!record) {
+    const error = new Error('Translation record not found');
+    error.code = 'TRANSLATION_NOT_FOUND';
+    throw error;
+  }
+  const policy = await resolvePublishingPolicy({
+    businessObjectType: record.businessObjectType,
+    languageCode: record.languageCode,
+  });
+  if (policy.publicationMode !== 'manual_review') {
+    const error = new Error('Translation approval is only available for manual-review publishing policies');
+    error.code = 'TRANSLATION_APPROVAL_NOT_APPLICABLE';
+    throw error;
+  }
+
+  return runTranslationPersistenceTransaction(async (session) => {
+    const taskId = await resolveOpenTaskId(translationRecordId, session);
+    if (!taskId) throw Object.assign(new Error('Open translation review task not found'), { code: 'TRANSLATION_REVIEW_TASK_NOT_FOUND' });
+    const result = await transitionTranslationState(
         {
           translationRecordId,
           expectedVersion,
@@ -223,11 +248,35 @@ export const approveTranslationPublication = ({
           eventType: 'translation.publication_approved',
           details: { comment },
         },
-        { session }
-      ),
-    notification: recipient ? { recipient, eventType: 'available' } : null,
+        { session });
+    const task = await completeTranslationReviewTask({ taskId, actorId: adminId, outcome: 'approved', comment }, { session });
+    if (recipient) await queueTranslationNotification({ recipient, eventType: 'available', businessObjectType: result.record.businessObjectType, businessObjectId: result.record.businessObjectId, languageCode: result.record.languageCode, translationRecordId: result.record._id }, { session });
+    return { ...result, task };
   });
 };
+
+const resolveOpenTaskId = async (translationRecordId, session) => {
+  const { default: TranslationReviewTask } = await import('../../models/TranslationReviewTask.js');
+  const task = await TranslationReviewTask.findOne({ translationRecordId, status: { $in: ['pending', 'assigned', 'in_review', 'returned_for_modification'] } }).sort({ updatedAt: -1 }).session(session);
+  return task?._id || null;
+};
+
+const completeManualReviewOutcome = async ({ translationRecordId, expectedVersion, adminId, comment, outcome }) =>
+  runTranslationPersistenceTransaction(async (session) => {
+    const taskId = await resolveOpenTaskId(translationRecordId, session);
+    if (!taskId) throw Object.assign(new Error('Open translation review task not found'), { code: 'TRANSLATION_REVIEW_TASK_NOT_FOUND' });
+    const result = await transitionTranslationState({
+      translationRecordId, expectedVersion,
+      changes: { translationStatus: outcome, publicationStatus: 'unpublished' },
+      modificationSource: 'administrator', actor: adminId, actorSnapshot: { role: 'admin' },
+      eventType: `translation.review_${outcome}`, details: { comment },
+    }, { session });
+    const task = await completeTranslationReviewTask({ taskId, actorId: adminId, outcome, comment }, { session });
+    return { ...result, task };
+  });
+
+export const rejectTranslationReview = (args) => completeManualReviewOutcome({ ...args, outcome: 'rejected' });
+export const returnTranslationForModification = (args) => completeManualReviewOutcome({ ...args, outcome: 'returned_for_modification' });
 
 export const unpublishTranslation = ({
   translationRecordId,

@@ -23,12 +23,13 @@ import { backupDB } from '../utils/dbBackup.js';
 import { restoreDB } from '../utils/dbRestore.js';
 import { recalculateListingScore } from '../utils/listingScoreCalculator.js';
 import { applyAutomaticPublicationForObject } from '../services/translation/publishingWorkflowService.js';
-import { getEnabledLanguages } from '../config/supportedLanguages.js';
+import { getEnabledLanguageConfigurations } from '../services/translation/languageConfigurationService.js';
 import {
   markObjectTranslationsOutdated,
   requestBulkTranslations,
 } from '../services/translation/translationEngine.js';
 import { triggerCmsTranslations } from '../services/translation/cmsTranslationTrigger.js';
+import { projectLocalizedObject, projectLocalizedObjects, sendPublicLanguageError } from '../services/translation/publicLocalizationService.js';
 
 const triggerCategoryTranslations = async (category, adminId, { sourceChanged = false } = {}) => {
   const sourceVersion = category.updatedAt.getTime();
@@ -42,7 +43,7 @@ const triggerCategoryTranslations = async (category, adminId, { sourceChanged = 
   }
 
   return requestBulkTranslations(
-    getEnabledLanguages()
+    (await getEnabledLanguageConfigurations())
       .filter(({ isSource }) => !isSource)
       .map(({ code }) => ({
         businessObjectType: 'category',
@@ -224,10 +225,11 @@ export const getPageContent = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: content,
+      data: await projectLocalizedObject({ businessObjectType: 'cms', object: content, language: req.query.language }),
     });
   } catch (error) {
     console.error('Get Page Content Error:', error);
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({
       success: false,
       message: error.message,
@@ -527,8 +529,9 @@ export const unpinListing = async (req, res) => {
 export const getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find().sort({ order: 1 });
-    res.status(200).json(categories);
+    res.status(200).json(await projectLocalizedObjects({ businessObjectType: 'category', objects: categories, language: req.query.language }));
   } catch (error) {
+    if (error.status) return sendPublicLanguageError(res, error);
     res.status(500).json({ message: error.message });
   }
 };

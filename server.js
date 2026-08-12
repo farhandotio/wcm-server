@@ -5,11 +5,14 @@ import startPromotionCleaner from './src/utils/promotionCleaner.js';
 import { initCronJobs } from './src/utils/cronJobs.js';
 import { connectRedis } from './src/config/redis.js';
 import { migratePromotionState } from './src/utils/migratePromotionState.js';
+import { startTranslationQueuePoller } from './src/services/translation/translationQueuePoller.js';
+import { seedLanguageConfigurations } from './src/services/translation/languageConfigurationService.js';
 
 const port = process.env.PORT || 5000;
 
 const startServer = async () => {
   await connectDB();
+  await seedLanguageConfigurations();
   await migratePromotionState();
   await connectRedis();
 
@@ -17,6 +20,7 @@ const startServer = async () => {
     console.log(`Server is running on PORT: ${port}`);
     startPromotionCleaner();
     initCronJobs();
+    startTranslationQueuePoller();
   });
 };
 
